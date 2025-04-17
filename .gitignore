@@ -176,5 +176,7 @@ cython_debug/
 # Specific project directories to ignore completely
 /opentrons/
 /buildroot/
-/oe-cover/
+/oe-core/
 /ot3-firmware/
+
+!.vscode/settings.json
