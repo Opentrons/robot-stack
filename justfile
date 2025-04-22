@@ -12,5 +12,11 @@
 
 # lint and format with ruff
 @fix:
-    uv run black go.py
-    uv run ruff check --fix --unsafe-fixes go.py
+    uv run black .
+    uv run ruff check --fix --unsafe-fixes .
+
+@manifest:
+    uv run ./automation/manifest.py
+
+mypy:
+    uv run mypy .

@@ -1,5 +1,4 @@
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
@@ -12,6 +11,7 @@ console = Console(log_time=False)
 # ------------------------------------------------------------------------------
 # Data Model
 # ------------------------------------------------------------------------------
+
 
 @dataclass
 class RepoSpec:
@@ -29,6 +29,7 @@ class RepoSpec:
             if chore:
                 branches.append(chore)
         return branches
+
 
 # Define repository specifications
 repos = [
@@ -66,20 +67,24 @@ repos = [
     ),
 ]
 
+
 @dataclass
 class RepoState:
     branch_tags: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
     overall_tags: Dict[str, Optional[str]] = field(default_factory=dict)
 
+
 # ------------------------------------------------------------------------------
 # Git Helpers
 # ------------------------------------------------------------------------------
+
 
 def run_git_command(args: List[str], cwd: Path = None) -> str:
     result = subprocess.run(["git"] + args, cwd=cwd, text=True, capture_output=True)
     if result.returncode != 0:
         raise RuntimeError(f"Git command failed: {' '.join(args)}\n{result.stderr}")
     return result.stdout.strip()
+
 
 def clone_or_fetch_repo(repo: RepoSpec) -> None:
     if not (repo.local_path.exists() and (repo.local_path / ".git").exists()):
@@ -90,17 +95,11 @@ def clone_or_fetch_repo(repo: RepoSpec) -> None:
         console.log(f"[bold blue]Fetching[/bold blue] {repo.name}")
         run_git_command(["fetch", "--all"], cwd=repo.local_path)
 
+
 def get_latest_chore_release_branch(repo_url: str) -> str:
     out = run_git_command(["ls-remote", "--heads", repo_url])
-    branches = [
-        line.split("refs/heads/")[1]
-        for line in out.splitlines()
-        if "refs/heads/chore_release-" in line
-    ]
-    numeric = [
-        b for b in branches
-        if b.replace("chore_release-", "").replace(".", "").isdigit()
-    ]
+    branches = [line.split("refs/heads/")[1] for line in out.splitlines() if "refs/heads/chore_release-" in line]
+    numeric = [b for b in branches if b.replace("chore_release-", "").replace(".", "").isdigit()]
     if not numeric:
         return ""
     latest = sorted(
@@ -108,6 +107,7 @@ def get_latest_chore_release_branch(repo_url: str) -> str:
         key=lambda s: semver.Version.parse(s.replace("chore_release-", "")),
     )[-1]
     return latest
+
 
 def ensure_branches_checked_out(repo: RepoSpec, branches: List[str]) -> None:
     for branch in branches:
@@ -117,6 +117,7 @@ def ensure_branches_checked_out(repo: RepoSpec, branches: List[str]) -> None:
         else:
             run_git_command(["checkout", branch], cwd=repo.local_path)
             run_git_command(["pull"], cwd=repo.local_path)
+
 
 def get_latest_tags(local_path: Path, branch: str, patterns: List[str], count: int = 7) -> List[str]:
     tags = []
@@ -128,9 +129,11 @@ def get_latest_tags(local_path: Path, branch: str, patterns: List[str], count: i
         tags.extend(out.splitlines()[:count])
     return tags
 
+
 # ------------------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------------------
+
 
 def main():
     results: Dict[str, RepoState] = {}
@@ -172,14 +175,10 @@ def main():
                     if overall in tags:
                         branch_found = branch
                         break
-            summary.add_row(
-                name,
-                pattern,
-                overall or "[italic]None[/italic]",
-                branch_found or "[italic]N/A[/italic]"
-            )
+            summary.add_row(name, pattern, overall or "[italic]None[/italic]", branch_found or "[italic]N/A[/italic]")
 
     console.print(summary)
+
 
 if __name__ == "__main__":
     main()

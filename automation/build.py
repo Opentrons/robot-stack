@@ -1,4 +1,3 @@
-
 from rich.console import Console
 from rich.prompt import Prompt
 
@@ -14,20 +13,43 @@ console = Console()
 
 # ask the user if this is an internal or external release?
 release_type = Prompt.ask(
-    "[bold]Is this an internal (ot3) or external release?[/bold]",
-    choices=["internal", "external"],
-    default="external"
+    "[bold]Is this an internal (ot3@) or external (v*) release?[/bold]", choices=["internal", "external"], default="external"
 )
 
 console.print(f"Selected release type: [bold]{release_type}[/bold]")
 
+# find the latest tag that has been published
+# we will look at all sources
+# https://builds.opentrons.com/app/alpha.yml
+# https://builds.opentrons.com/app/alpha-mac.yml
+# https://builds.opentrons.com/app/alpha-linux.yml
+
+# https://builds.opentrons.com/app/beta.yml
+# https://builds.opentrons.com/app/beta-mac.yml
+# https://builds.opentrons.com/app/beta-linux.yml
+
+# https://builds.opentrons.com/app/latest.yml
+# https://builds.opentrons.com/app/latest-mac.yml
+# https://builds.opentrons.com/app/latest-linux.yml
+
+# release
+# https://builds.opentrons.com/app/releases.json - app - informational, yml are authoritative.
+# https://builds.opentrons.com/ot3-oe/releases.json - Flex
+# https://builds.opentrons.com/ot2-br/releases.json - OT2
+# Internal
+# https://ot3-development.builds.opentrons.com/app/releases.json - app - informational, yml are authoritative.
+# https://ot3-development.builds.opentrons.com/ot3-oe/releases.json - Flex
+# https://ot3-development.builds.opentrons.com/ot2-br/releases.json - OT2 (edited)
+
+# is there a build currently running that will update a release
 
 # 2. Are release notes merged?
 #    • api/release‑notes‑internal.md         (robot internal)
 #    • app-shell/build/release‑notes‑internal.md  (app internal)
 #    • api/release‑notes.md
 #    • app-shell/build/release‑notes.md
-#
+
+
 # 3. Any changes to https://github.com/Opentrons/opentrons-modules?
 #    → Requires module tag(s) + buildroot & oe-core updates
 #
