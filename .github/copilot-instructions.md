@@ -1,5 +1,7 @@
 # GitHub Copilot Instructions
 
+<https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file>
+
 ## 🧠 Repository Purpose
 
 This repository provides a Python CLI ish toolset to evaluate, tag, and trigger builds across multiple repositories that make up the Opentrons robot software stack. These tools help the user analyze changes in all of teh repositories and then gather and present the information needed to make decisions about what commits needs tagged in each repository and generates a report for each build.

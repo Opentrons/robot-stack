@@ -8,7 +8,7 @@
 
 # update opentrons repositories
 @go:
-    uv run go.py
+    uv run ./automation/go.py
 
 # lint and format with ruff
 @fix:
