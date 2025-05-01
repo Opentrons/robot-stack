@@ -14,8 +14,6 @@ from rich import box
 console = Console()
 
 
-
-
 def print_versions_table(versions: List[dict]) -> None:
     """Display versions in a Rich table."""
     table = Table(title="Recent S3 Object Versions")
@@ -33,7 +31,6 @@ def print_versions_table(versions: List[dict]) -> None:
             v["ETag"],
         )
     console.print(table)
-
 
 
 async def fetch_app_metadata(client: httpx.AsyncClient, label: str, url: str) -> Tuple[str, Optional[AppMetadata], Optional[str]]:
@@ -58,6 +55,7 @@ async def fetch_app_metadata(client: httpx.AsyncClient, label: str, url: str) ->
         return label, meta, None
     except Exception as e:
         return label, None, str(e)
+
 
 def display_app_metadata(results: List[Tuple[str, Optional[AppMetadata], Optional[str]]]) -> None:
     console = Console()

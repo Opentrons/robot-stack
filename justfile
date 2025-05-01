@@ -18,5 +18,5 @@
 @manifest:
     uv run ./automation/manifest.py
 
-mypy:
+@mypy:
     uv run mypy .

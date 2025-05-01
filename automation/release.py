@@ -16,9 +16,11 @@ class ReleaseCycle:
 
 @dataclass
 class InternalReleaseCycle(ReleaseCycle):
+    pass
 
 @dataclass
 class ExternalReleaseCycle(ReleaseCycle):
+    pass
 
 @dataclass
 class Release:

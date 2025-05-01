@@ -12,7 +12,6 @@ from rich import box
 console = Console()
 
 
-
 async def fetch_robot_releases(
     client: httpx.AsyncClient, label: str, url: str
 ) -> Tuple[str, Optional[RobotReleasesCollection], Optional[str]]:

@@ -29,24 +29,24 @@ LATEST_APP_LINUX_URL: Final[str] = "https://builds.opentrons.com/app/latest-linu
 # ------------------------------------------------------------------------------
 
 INTERNAL_ALPHA_APP_WINDOWS_URL: Final[str] = "https://ot3-development.builds.opentrons.com/app/alpha.yml"
-INTERNAL_ALPHA_APP_MAC_URL:     Final[str] = "https://ot3-development.builds.opentrons.com/app/alpha-mac.yml"
-INTERNAL_ALPHA_APP_LINUX_URL:   Final[str] = "https://ot3-development.builds.opentrons.com/app/alpha-linux.yml"
+INTERNAL_ALPHA_APP_MAC_URL: Final[str] = "https://ot3-development.builds.opentrons.com/app/alpha-mac.yml"
+INTERNAL_ALPHA_APP_LINUX_URL: Final[str] = "https://ot3-development.builds.opentrons.com/app/alpha-linux.yml"
 
 # ------------------------------------------------------------------------------
 # Internal Beta Channel
 # ------------------------------------------------------------------------------
 
 INTERNAL_BETA_APP_WINDOWS_URL: Final[str] = "https://ot3-development.builds.opentrons.com/app/beta.yml"
-INTERNAL_BETA_APP_MAC_URL:     Final[str] = "https://ot3-development.builds.opentrons.com/app/beta-mac.yml"
-INTERNAL_BETA_APP_LINUX_URL:   Final[str] = "https://ot3-development.builds.opentrons.com/app/beta-linux.yml"
+INTERNAL_BETA_APP_MAC_URL: Final[str] = "https://ot3-development.builds.opentrons.com/app/beta-mac.yml"
+INTERNAL_BETA_APP_LINUX_URL: Final[str] = "https://ot3-development.builds.opentrons.com/app/beta-linux.yml"
 
 # ------------------------------------------------------------------------------
 # Internal Latest Stable Channel
 # ------------------------------------------------------------------------------
 
 INTERNAL_LATEST_APP_WINDOWS_URL: Final[str] = "https://ot3-development.builds.opentrons.com/app/latest.yml"
-INTERNAL_LATEST_APP_MAC_URL:     Final[str] = "https://ot3-development.builds.opentrons.com/app/latest-mac.yml"
-INTERNAL_LATEST_APP_LINUX_URL:   Final[str] = "https://ot3-development.builds.opentrons.com/app/latest-linux.yml"
+INTERNAL_LATEST_APP_MAC_URL: Final[str] = "https://ot3-development.builds.opentrons.com/app/latest-mac.yml"
+INTERNAL_LATEST_APP_LINUX_URL: Final[str] = "https://ot3-development.builds.opentrons.com/app/latest-linux.yml"
 
 
 # ------------------------------------------------------------------------------
