@@ -34,10 +34,12 @@ console.print(f"Selected release type: [bold]{release_type}[/bold]")
 
 # release
 # https://builds.opentrons.com/app/releases.json - app - informational, yml are authoritative.
+# https://s3.us-east-1.amazonaws.com/builds.opentrons.com/app/releases.json - direct
 # https://builds.opentrons.com/ot3-oe/releases.json - Flex
 # https://builds.opentrons.com/ot2-br/releases.json - OT2
 # Internal
 # https://ot3-development.builds.opentrons.com/app/releases.json - app - informational, yml are authoritative.
+# https://s3.us-east-1.amazonaws.com/ot3-development.builds.opentrons.com/app/releases.json
 # https://ot3-development.builds.opentrons.com/ot3-oe/releases.json - Flex
 # https://ot3-development.builds.opentrons.com/ot2-br/releases.json - OT2 (edited)
 

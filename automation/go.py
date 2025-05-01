@@ -9,6 +9,9 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
+from rich.panel import Panel
+from rich.markdown import Markdown
+
 console = Console(log_time=False)
 
 
@@ -230,6 +233,19 @@ repos: List[RepoSpec] = [
 
 def main() -> None:
     """Prompt for release info, sync repos, and print summary + appropriate tables."""
+    assumptions_md = Markdown(
+        """
+##Tool Assumptions
+
+- All tags we care about are *annotated*
+  - example `git tag -a v8.4.0-alpha.8 -m 'chore(release): v8.4.0-alpha.8'`
+    - This gives the tag a message, creator, and date
+    - Then we use `git tag -l --sort=-creatordate` to get the latest tag
+- Across every robot-stack repo, isolation branches for a release cycle look like: `chore_release-<version>`
+"""
+    )
+
+    console.print(Panel(assumptions_md, title="🔧 Assumptions", border_style="cyan"))
     release_type = Prompt.ask("Release type", choices=["internal", "external"], default="external")
     stability = Prompt.ask("Stability", choices=["stable", "unstable"], default="unstable")
     version = Prompt.ask("Base version", default="v8.4.0")
