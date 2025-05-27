@@ -10,13 +10,14 @@
 @go:
     uv run ./automation/go.py
 
-# lint and format with ruff
+# format and lint with ruff
 @fix:
-    uv run black .
+    uv run ruff format .
     uv run ruff check --fix --unsafe-fixes .
 
 @manifest:
     uv run ./automation/manifest.py
 
-@mypy:
-    uv run mypy .
+@ty:
+    uv sync
+    uv run ty check

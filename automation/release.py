@@ -1,11 +1,12 @@
-
-from typing import List, Optional, Final, Dict, Tuple
 from dataclasses import dataclass
+from typing import Dict, List, Optional
 
+import semver
 
 INTERNAL = "internal"
 EXTERNAL = "external"
 RELEASE_CHANNELS = [INTERNAL, EXTERNAL]
+
 
 @dataclass
 class ReleaseCycle:
@@ -14,20 +15,24 @@ class ReleaseCycle:
     buildroot_branch: str
     ot3_firmware_branch: str
 
+
 @dataclass
 class InternalReleaseCycle(ReleaseCycle):
     pass
+
 
 @dataclass
 class ExternalReleaseCycle(ReleaseCycle):
     pass
 
+
 @dataclass
 class Release:
-    channel: 
+    channel: str
     robot_stack_tag: str
     robot_stack_version: str
     monorepo_chore_release: str
+
 
 @dataclass
 class RobotRelease:
@@ -36,6 +41,7 @@ class RobotRelease:
     system: str
     version_url: str
     release_notes: str
+
 
 @dataclass
 class AppFile:
@@ -52,6 +58,7 @@ class AppMetadata:
     sha512: str
     releaseNotes: str
     releaseDate: Optional[str] = None
+
 
 @dataclass
 class RobotReleasesCollection:

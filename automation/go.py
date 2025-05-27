@@ -1,16 +1,15 @@
 import subprocess
-from pathlib import Path
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional
 
 from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
-
-from rich.panel import Panel
-from rich.markdown import Markdown
 
 console = Console(log_time=False)
 
@@ -252,7 +251,7 @@ def main() -> None:
     if not version.startswith("v"):
         version = f"v{version}"
 
-    console.print(f"🛠 Release: [bold]{release_type}[/], " f"Stability: [bold]{stability}[/], " f"Version: [bold]{version}[/]\n")
+    console.print(f"🛠 Release: [bold]{release_type}[/], Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n")
 
     # Parallel sync & collect
     results: Dict[str, RepoState] = {}

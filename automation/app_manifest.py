@@ -1,15 +1,13 @@
-import asyncio
-from dataclasses import dataclass
-from typing import List, Optional, Final, Dict, Tuple
 from datetime import datetime
+from typing import List, Optional, Tuple
 
-import semver
 import httpx
 import yaml
+from rich import box
 from rich.console import Console
 from rich.table import Table
-from rich import box
 
+from automation.release import AppFile, AppMetadata
 
 console = Console()
 
