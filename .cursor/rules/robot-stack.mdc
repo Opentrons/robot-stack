@@ -1,0 +1,80 @@
+---
+description: Robot-stack repo purpose, Python standards, and CLI conventions
+alwaysApply: true
+---
+
+# Robot Stack
+
+## Repository Purpose
+
+This repository provides a Python CLI-ish interactive (and someday autonomous) toolset to evaluate, tag, and trigger builds across multiple repositories that make up the Opentrons robot software stack. These tools help analyze changes across repositories, gather and present the information needed to decide which commits need tagging in each repository, and generate a report for each build.
+
+- **Flex robots** using `oe-core`, `ot3-firmware`, and `opentrons`
+- **OT-2 robots** using `opentrons-ot2` and `buildroot`
+- **Release infrastructure** reference repo: `robot-stack-infra`
+
+The system supports internal and external release channels. This tool helps enforce consistency and correctness before triggering final operating system builds.
+
+## Release Paths
+
+`automation/go.py` supports two release paths. **Flex is the default.**
+
+| Path | Repos synced | App repo (tagging) | Version scheme |
+|---|---|---|---|
+| **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Semver with `v` prefix (e.g. `v8.5.0`, `v8.5.0-alpha.6`) |
+| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Datever (see below) |
+
+`robot-stack-infra` is always cloned and pulled for both paths as a reference repo, but is not included in release tables or tagging.
+
+Isolation branches follow `chore_release-<version>` in each repo.
+
+### OT-2 Datever
+
+OT-2 releases use `YY.M.P` where `P = day * 100 + release_num`.
+
+Patch width is determined by the day:
+
+- **Single-digit days (1-9):** 3-digit patch
+  - May 1, release 1 → `26.5.101`
+  - May 9, release 2 → `26.5.902`
+- **Two-digit days (10-31):** 4-digit patch
+  - May 10, release 1 → `26.5.1001`
+  - May 24, release 2 → `26.5.2402`
+
+Same-day follow-up releases increment `release_num` (1-99). External tags use a `v` prefix; internal tags use `internal@`.
+
+## Development Standards
+
+### Language & Version
+
+- Python **3.14**
+- Static typing required throughout (`mypy` compliance)
+- Use PEP8 naming and structure guidelines
+
+### Formatting & Style
+
+- Use `black` for formatting
+- Use `ruff` for linting, code quality, and import sorting
+- Use `mypy` for static type checking
+- Prefer `async` / `await` where appropriate
+- Favor readability over cleverness
+- Comments should explain context not present in the code (why, not what)
+
+### Code Commenting & Structure
+
+- Every function and class should include a first meaningful comment or docstring following the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
+- Type hints for all parameters and return values
+- Use descriptive variable and function names
+- Prefer composition over inheritance unless there is a clear hierarchy
+
+## CLI & Automation Patterns
+
+- Use `argparse` or `typer` for command-line utilities
+- Use `subprocess` for shell command execution with safety in mind (`check=True`, avoid `shell=True`)
+- Use `rich` for terminal output (tables, logs, progress bars)
+
+## Miscellaneous
+
+- Use `Path` from `pathlib`, not raw strings or `os.path`
+- Default to immutability where possible (e.g., tuples, frozen dataclasses)
+- CLI tools should include a `--dry-run` mode for safety

@@ -21,3 +21,11 @@
 @ty:
     uv sync
     uv run ty check
+
+teardown:
+    rm -rf .venv
+
+setup:
+    uv venv .venv --python 3.14
+    uv sync
+    uv pip install -e .

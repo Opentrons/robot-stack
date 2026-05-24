@@ -66,6 +66,8 @@ def display_app_metadata(results: List[Tuple[str, Optional[AppMetadata], Optiona
     for label, meta, err in results:
         if err:
             table.add_row(label, "ERROR", "-", f"[red]{err}[/red]")
+        elif meta is None:
+            table.add_row(label, "ERROR", "-", "[red]missing metadata[/red]")
         else:
             if meta.releaseDate:
                 utc = datetime.fromisoformat(meta.releaseDate.replace("Z", "+00:00"))

@@ -3,24 +3,24 @@ name = "robot-stack"
 version = "0.1.0"
 description = "Tools to inspect and build Opentrons robots"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28.1",
-    "mypy>=1.15.0",
-    "pyyaml>=6.0.2",
-    "rich>=14.0.0",
-    "ruff>=0.11.5",
-    "rust-just>=1.40.0",
+    "mypy>=2.1.0",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "ruff>=0.15.14",
+    "rust-just>=1.51.0",
     "semver>=3.0.4",
-    "ty>=0.0.1a7",
-    "types-pyyaml>=6.0.12.20250402",
+    "ty>=0.0.39",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 # Black configuration removed in favor of Ruff formatter
 
 [tool.ruff]
 line-length = 130
-target-version = "py313"
+target-version = "py314"
 exclude = [
     ".git",
     ".venv",
@@ -29,6 +29,8 @@ exclude = [
     "opentrons",
     "ot3-firmware",
     "oe-core",
+    "opentrons-ot2",
+    "robot-stack-infra",
 ]
 
 [tool.ruff.format]
@@ -48,12 +50,15 @@ known-first-party = ["automation"]
 [tool.ty.rules]
 unused-ignore-comment = "error"
 redundant-cast = "warn"
-possibly-unbound-attribute = "error"
-possibly-unbound-import = "error"
+possibly-missing-attribute = "error"
+possibly-missing-import = "error"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.29.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["automation"]
+
+[tool.uv]
+package = true

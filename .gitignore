@@ -178,5 +178,15 @@ cython_debug/
 /buildroot/
 /oe-core/
 /ot3-firmware/
+/opentrons-ot2/
+/robot-stack-infra/
 
 !.vscode/settings.json
+
+# Cursor IDE - track shared rules only
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+
+z.md
+z.sh

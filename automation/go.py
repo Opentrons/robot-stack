@@ -1,8 +1,12 @@
+from __future__ import annotations
+
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -31,7 +35,7 @@ class RepoSpec:
     def branches_to_sync(self, version: str) -> List[str]:
         """Decide which branches to sync based on the base version."""
         branches = [self.default_branch]
-        chore = f"chore_release-{version.lstrip('v')}"
+        chore = chore_release_branch(version)
         if branch_exists(self.repo_url, chore):
             branches.append(chore)
         return branches
@@ -41,6 +45,71 @@ class RepoSpec:
 class RepoState:
     branch_tags: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
     overall_tags: Dict[str, Optional[str]] = field(default_factory=dict)
+
+
+# ------------------------------------------------------------------------------
+# OT-2 Datever
+# ------------------------------------------------------------------------------
+
+
+OT2_DATEVER_RE = re.compile(r"^(\d{2})\.(\d{1,2})\.(\d+)$")
+
+
+def encode_ot2_datever(year: int, month: int, day: int, release_num: int = 1) -> str:
+    """Encode an OT-2 datever: YY.M.P where P is a fixed-width day+release patch."""
+    if release_num < 1 or release_num > 99:
+        raise ValueError("release_num must be between 1 and 99")
+    if day < 1 or day > 31:
+        raise ValueError("day must be between 1 and 31")
+
+    yy = year % 100
+    patch = day * 100 + release_num
+    return f"{yy}.{month}.{patch}"
+
+
+def decode_ot2_datever(version: str) -> Tuple[int, int, int, int]:
+    """Decode an OT-2 datever into (year, month, day, release_num)."""
+    clean = version.lstrip("v")
+    match = OT2_DATEVER_RE.match(clean)
+    if match is None:
+        raise ValueError(f"Invalid OT-2 datever: {version}")
+
+    yy = int(match.group(1))
+    month = int(match.group(2))
+    patch = int(match.group(3))
+    year = 2000 + yy
+
+    if 100 <= patch <= 999:
+        day = patch // 100
+        release_num = patch % 100
+        if 1 <= day <= 9 and release_num >= 1:
+            return year, month, day, release_num
+
+    if 1000 <= patch <= 3199:
+        day = patch // 100
+        release_num = patch % 100
+        if 10 <= day <= 31 and release_num >= 1:
+            return year, month, day, release_num
+
+    raise ValueError(f"Invalid OT-2 datever patch component: {version}")
+
+
+def ot2_datever_for_date(release_date: date, release_num: int = 1) -> str:
+    """Return the OT-2 datever string for a calendar date."""
+    return encode_ot2_datever(release_date.year, release_date.month, release_date.day, release_num)
+
+
+def strip_tag_version(tag: str) -> str:
+    """Remove known tag prefixes so datever parsing can inspect the version."""
+    for prefix in ("internal@", "v"):
+        if tag.startswith(prefix):
+            return tag[len(prefix) :]
+    return tag
+
+
+def chore_release_branch(version: str) -> str:
+    """Return the chore_release branch name for a release version."""
+    return f"chore_release-{version.lstrip('v')}"
 
 
 # ------------------------------------------------------------------------------
@@ -108,6 +177,78 @@ def process_repo(repo: RepoSpec, version: str) -> RepoState:
     return state
 
 
+def get_next_ot2_tag_command(
+    repo: RepoSpec,
+    version: str,
+    release_type: str,
+    state: RepoState,
+    branch: str,
+) -> Tuple[str, str]:
+    """Return the next OT-2 datever tag for the same calendar day as the base version."""
+    year, month, day, _ = decode_ot2_datever(version)
+
+    same_day_releases: List[int] = []
+    for pat_tags in state.branch_tags.get(branch, {}).values():
+        for tag in pat_tags:
+            try:
+                tag_year, tag_month, tag_day, tag_release = decode_ot2_datever(strip_tag_version(tag))
+            except ValueError:
+                continue
+            if (tag_year, tag_month, tag_day) == (year, month, day):
+                same_day_releases.append(tag_release)
+
+    next_release = max(same_day_releases, default=0) + 1
+    next_version = encode_ot2_datever(year, month, day, next_release)
+    tag_prefix = "v" if release_type == "external" else "internal@"
+    next_tag = f"{tag_prefix}{next_version}"
+    cmd = f"git tag -a {next_tag} -m 'chore(release): {next_tag}' && git log --oneline -n 10"
+    return cmd, next_tag
+
+
+def get_next_tag_command(
+    repo: RepoSpec,
+    version: str,
+    stability: str,
+    state: RepoState,
+    branch: str,
+    release_type: str = "external",
+    release_path: Optional[ReleasePath] = None,
+) -> Tuple[str, str]:
+    """Return the git command and next tag name for the next annotated tag."""
+    if release_path is not None and release_path.name == "ot2":
+        return get_next_ot2_tag_command(repo, version, release_type, state, branch)
+
+    # Determine tag pattern
+    if stability == "unstable":
+        tag_prefix = f"{version}-alpha."
+    else:
+        tag_prefix = version
+    # Find all tags for this pattern
+    tags = []
+    for pat_tags in state.branch_tags.get(branch, {}).values():
+        tags.extend(pat_tags)
+    # Filter tags matching the prefix
+    matching = [t for t in tags if t.startswith(tag_prefix)]
+    # Extract numeric suffix for alpha tags
+    if stability == "unstable":
+        numbers = []
+        for t in matching:
+            m = re.match(rf"{re.escape(tag_prefix)}(\d+)", t)
+            if m is not None:
+                numbers.append(int(m.group(1)))
+        next_num = max(numbers) + 1 if numbers else 0
+        next_tag = f"{tag_prefix}{next_num}"
+    else:
+        # For stable, just use the version if not present
+        if version not in matching:
+            next_tag = version
+        else:
+            raise ValueError(f"Tag {version} already exists on {branch}")
+    # Annotated tag command
+    cmd = f"git tag -a {next_tag} -m 'chore(release): {next_tag}' && git log --oneline -n 10"
+    return cmd, next_tag
+
+
 # ------------------------------------------------------------------------------
 # Table Printing Functions
 # ------------------------------------------------------------------------------
@@ -125,7 +266,7 @@ def print_external_table(results: Dict[str, RepoState], repos: List[RepoSpec], v
             continue
 
         pat = repo.external_tag_pattern
-        chore = f"chore_release-{version.lstrip('v')}"
+        chore = chore_release_branch(version)
         branch = chore if chore in st.branch_tags else repo.default_branch
         tags = st.branch_tags[branch].get(pat, [])
         tag = tags[0] if tags else None
@@ -154,7 +295,7 @@ def print_internal_table(results: Dict[str, RepoState], repos: List[RepoSpec], v
             continue
 
         pat = repo.internal_tag_pattern
-        chore = f"chore_release-{version.lstrip('v')}"
+        chore = chore_release_branch(version)
         branch = chore if chore in st.branch_tags else repo.default_branch
         tags = st.branch_tags[branch].get(pat, [])
         tag = tags[0] if tags else None
@@ -227,7 +368,82 @@ repos: List[RepoSpec] = [
         external_tag_pattern="v",
         internal_tag_pattern="ot3@",
     ),
+    RepoSpec(
+        name="opentrons-ot2",
+        repo_url="https://github.com/Opentrons/opentrons-ot2.git",
+        local_path=Path("./opentrons-ot2"),
+        default_branch="edge",
+        external_tag_pattern="v",
+        internal_tag_pattern="internal@",
+    ),
+    RepoSpec(
+        name="robot-stack-infra",
+        repo_url="https://github.com/Opentrons/robot-stack-infra.git",
+        local_path=Path("./robot-stack-infra"),
+        default_branch="main",
+        external_tag_pattern="release@",
+        internal_tag_pattern="release-ci@",
+    ),
 ]
+
+
+@dataclass(frozen=True)
+class ReleasePath:
+    """Repos and app tagging behavior for a robot release path."""
+
+    name: str
+    label: str
+    repo_names: frozenset[str]
+    taggable_repo: str
+
+
+RELEASE_PATHS: Dict[str, ReleasePath] = {
+    "flex": ReleasePath(
+        name="flex",
+        label="Flex",
+        repo_names=frozenset({"opentrons", "oe-core", "ot3-firmware"}),
+        taggable_repo="opentrons",
+    ),
+    "ot2": ReleasePath(
+        name="ot2",
+        label="OT-2",
+        repo_names=frozenset({"opentrons-ot2", "buildroot"}),
+        taggable_repo="opentrons-ot2",
+    ),
+}
+
+
+ALWAYS_SYNC_REPO_NAMES = frozenset({"robot-stack-infra"})
+
+
+def repos_for_path(path: ReleasePath) -> List[RepoSpec]:
+    """Return release-path repo specs, in manifest order."""
+    return [repo for repo in repos if repo.name in path.repo_names]
+
+
+def repos_to_sync(path: ReleasePath) -> List[RepoSpec]:
+    """Return all repo specs to clone or pull, including always-synced reference repos."""
+    names = path.repo_names | ALWAYS_SYNC_REPO_NAMES
+    return [repo for repo in repos if repo.name in names]
+
+
+def prompt_release_version(release_path: ReleasePath) -> str:
+    """Prompt for the base release version appropriate to the selected robot path."""
+    if release_path.name == "ot2":
+        default_version = ot2_datever_for_date(date.today())
+        while True:
+            version = Prompt.ask("Base version (OT-2 datever YY.M.D)", default=default_version)
+            try:
+                decode_ot2_datever(version.lstrip("v"))
+            except ValueError as err:
+                console.print(f"[red]Invalid OT-2 datever: {err}[/]")
+                continue
+            return version.lstrip("v")
+
+    version = Prompt.ask("Base version", default="v8.5.0")
+    if not version.startswith("v"):
+        version = f"v{version}"
+    return version
 
 
 def main() -> None:
@@ -245,18 +461,30 @@ def main() -> None:
     )
 
     console.print(Panel(assumptions_md, title="🔧 Assumptions", border_style="cyan"))
+    robot_path_name = Prompt.ask("Robot path", choices=list(RELEASE_PATHS), default="flex")
+    release_path = RELEASE_PATHS[robot_path_name]
+    active_repos = repos_for_path(release_path)
+    sync_repos = repos_to_sync(release_path)
     release_type = Prompt.ask("Release type", choices=["internal", "external"], default="external")
-    stability = Prompt.ask("Stability", choices=["stable", "unstable"], default="unstable")
-    version = Prompt.ask("Base version", default="v8.4.0")
-    if not version.startswith("v"):
-        version = f"v{version}"
-
-    console.print(f"🛠 Release: [bold]{release_type}[/], Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n")
+    if release_path.name == "ot2":
+        stability = "stable"
+        version = prompt_release_version(release_path)
+        console.print(
+            f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
+            f"Version: [bold]{version}[/]\n"
+        )
+    else:
+        stability = Prompt.ask("Stability", choices=["stable", "unstable"], default="unstable")
+        version = prompt_release_version(release_path)
+        console.print(
+            f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
+            f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"
+        )
 
     # Parallel sync & collect
     results: Dict[str, RepoState] = {}
     with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(process_repo, r, version): r for r in repos}
+        futures = {executor.submit(process_repo, r, version): r for r in sync_repos}
         for future in as_completed(futures):
             repo = futures[future]
             try:
@@ -266,19 +494,19 @@ def main() -> None:
                 console.log(f"[red]❌ {repo.name} failed: {err}[/]")
 
     # 1) Latest-tags summary for selected channel on chore_release if present
-    summary = Table(title="Latest Tags Summary", show_lines=True)
+    summary = Table(title=f"Latest Tags Summary ({release_path.label})", show_lines=True)
     summary.add_column("Repo", style="bold")
     summary.add_column("Pattern")
     summary.add_column("Latest Tag")
     summary.add_column("Branch")
 
-    for repo in repos:
+    for repo in active_repos:
         st = results.get(repo.name)
         if not st:
             continue
 
         pattern = repo.external_tag_pattern if release_type == "external" else repo.internal_tag_pattern
-        chore = f"chore_release-{version.lstrip('v')}"
+        chore = chore_release_branch(version)
         branch = chore if chore in st.branch_tags else repo.default_branch
         tags = st.branch_tags[branch].get(pattern, [])
         tag = tags[0] if tags else None
@@ -294,31 +522,51 @@ def main() -> None:
 
     # 2) Table + logs for chosen channel
     if release_type == "external":
-        print_external_table(results, repos, version)
-        for repo in repos:
+        print_external_table(results, active_repos, version)
+        for repo in active_repos:
+            if repo.name != release_path.taggable_repo:
+                continue
             st = results.get(repo.name)
             if not st:
                 continue
             pat = repo.external_tag_pattern
-            chore = f"chore_release-{version.lstrip('v')}"
+            chore = chore_release_branch(version)
             branch = chore if chore in st.branch_tags else repo.default_branch
             tags = st.branch_tags[branch].get(pat, [])
             tag = tags[0] if tags else None
             if tag:
                 show_changes_since_tag(repo, branch, tag)
+            # Print next tag command for taggable app repos
+            try:
+                cmd, next_tag = get_next_tag_command(
+                    repo, version, stability, st, branch, release_type, release_path
+                )
+                console.print(f"[bold green]Next tag command for {repo.name}:[/] {cmd}")
+            except Exception as e:
+                console.print(f"[yellow]No next tag for {repo.name}: {e}")
     else:
-        print_internal_table(results, repos, version)
-        for repo in repos:
+        print_internal_table(results, active_repos, version)
+        for repo in active_repos:
+            if repo.name != release_path.taggable_repo:
+                continue
             st = results.get(repo.name)
             if not st:
                 continue
             pat = repo.internal_tag_pattern
-            chore = f"chore_release-{version.lstrip('v')}"
+            chore = chore_release_branch(version)
             branch = chore if chore in st.branch_tags else repo.default_branch
             tags = st.branch_tags[branch].get(pat, [])
             tag = tags[0] if tags else None
             if tag:
                 show_changes_since_tag(repo, branch, tag)
+            # Print next tag command for taggable app repos
+            try:
+                cmd, next_tag = get_next_tag_command(
+                    repo, version, stability, st, branch, release_type, release_path
+                )
+                console.print(f"[bold green]Next tag command for {repo.name}:[/] {cmd}")
+            except Exception as e:
+                console.print(f"[yellow]No next tag for {repo.name}: {e}")
 
 
 if __name__ == "__main__":
