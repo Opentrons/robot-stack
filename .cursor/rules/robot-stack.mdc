@@ -28,6 +28,23 @@ The system supports internal and external release channels. This tool helps enfo
 
 Isolation branches follow `chore_release-<version>` in each repo.
 
+## Local Cloned Repos (Source of Truth)
+
+`automation/go.py` (via `just go`) clones and pulls stack repos into the workspace root. When investigating behavior in those projects (version tags, electron-updater, buildroot `write_version.py`, CI actions, release scripts, etc.), **read and search the source in these directories first**. Do not answer from memory or GitHub API alone when a local tree is available.
+
+| Directory | Upstream repo | Release path |
+|---|---|---|
+| `opentrons/` | Opentrons/opentrons | Flex |
+| `oe-core/` | Opentrons/oe-core | Flex |
+| `ot3-firmware/` | Opentrons/ot3-firmware | Flex |
+| `opentrons-ot2/` | Opentrons/opentrons-ot2 | OT-2 |
+| `buildroot/` | Opentrons/buildroot | OT-2 |
+| `robot-stack-infra/` | Opentrons/robot-stack-infra | reference only |
+
+- If a directory is missing or only has `.git` metadata, run `uv run just go` (or clone the repo into the path above) before deep investigation.
+- Prefer `Grep`, `SemanticSearch`, and `Read` on these paths over `gh api` / remote fetches for implementation details.
+- `automation/` in this repo orchestrates releases; stack behavior lives in the cloned repos.
+
 ### OT-2 Datever
 
 OT-2 releases use `YY.M.P` where `P = day * 100 + release_num`.
