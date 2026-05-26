@@ -4,9 +4,10 @@ import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -48,59 +49,76 @@ class RepoState:
 
 
 # ------------------------------------------------------------------------------
-# OT-2 Datever
+# OT-2 calendar semver (app + robot share the same version string)
 # ------------------------------------------------------------------------------
 
 
-OT2_DATEVER_RE = re.compile(r"^(\d{2})\.(\d{1,2})\.(\d+)$")
+OT2_RELEASE_TZ = ZoneInfo("America/New_York")
+OT2_VERSION_RE = re.compile(r"^(\d{2})\.(\d{1,2})\.(\d+)(?:-(alpha|beta))?$")
+Ot2Stability = Literal["stable", "alpha", "beta"]
 
 
-def encode_ot2_datever(year: int, month: int, day: int, release_num: int = 1) -> str:
-    """Encode an OT-2 datever: YY.M.P where P is a fixed-width day+release patch."""
-    if release_num < 1 or release_num > 99:
-        raise ValueError("release_num must be between 1 and 99")
+def ot2_release_date_today() -> date:
+    """Return today's calendar date in US Eastern, used for OT-2 version components."""
+    return datetime.now(OT2_RELEASE_TZ).date()
+
+
+def encode_ot2_version(year: int, month: int, day: int, build_num: int = 1) -> str:
+    """Encode OT-2 semver: YY.M.DNN where DNN = day * 100 + same-day build number."""
+    if build_num < 1 or build_num > 99:
+        raise ValueError("build_num must be between 1 and 99")
     if day < 1 or day > 31:
         raise ValueError("day must be between 1 and 31")
 
     yy = year % 100
-    patch = day * 100 + release_num
+    patch = day * 100 + build_num
     return f"{yy}.{month}.{patch}"
 
 
-def decode_ot2_datever(version: str) -> Tuple[int, int, int, int]:
-    """Decode an OT-2 datever into (year, month, day, release_num)."""
+def decode_ot2_version(version: str) -> Tuple[int, int, int, int, Optional[str]]:
+    """Decode OT-2 semver into (year, month, day, build_num, prerelease)."""
     clean = version.lstrip("v")
-    match = OT2_DATEVER_RE.match(clean)
+    match = OT2_VERSION_RE.match(clean)
     if match is None:
-        raise ValueError(f"Invalid OT-2 datever: {version}")
+        raise ValueError(f"Invalid OT-2 version: {version}")
 
     yy = int(match.group(1))
     month = int(match.group(2))
     patch = int(match.group(3))
+    prerelease = match.group(4)
     year = 2000 + yy
 
     if 100 <= patch <= 999:
         day = patch // 100
-        release_num = patch % 100
-        if 1 <= day <= 9 and release_num >= 1:
-            return year, month, day, release_num
+        build_num = patch % 100
+        if 1 <= day <= 9 and build_num >= 1:
+            return year, month, day, build_num, prerelease
 
     if 1000 <= patch <= 3199:
         day = patch // 100
-        release_num = patch % 100
-        if 10 <= day <= 31 and release_num >= 1:
-            return year, month, day, release_num
+        build_num = patch % 100
+        if 10 <= day <= 31 and build_num >= 1:
+            return year, month, day, build_num, prerelease
 
-    raise ValueError(f"Invalid OT-2 datever patch component: {version}")
+    raise ValueError(f"Invalid OT-2 version patch component: {version}")
 
 
-def ot2_datever_for_date(release_date: date, release_num: int = 1) -> str:
-    """Return the OT-2 datever string for a calendar date."""
-    return encode_ot2_datever(release_date.year, release_date.month, release_date.day, release_num)
+def ot2_version_for_date(release_date: date | None = None, build_num: int = 1) -> str:
+    """Return the OT-2 semver string for a calendar date (Eastern by default)."""
+    if release_date is None:
+        release_date = ot2_release_date_today()
+    return encode_ot2_version(release_date.year, release_date.month, release_date.day, build_num)
+
+
+def ot2_prerelease_for_stability(stability: Ot2Stability) -> Optional[str]:
+    """Map OT-2 stability choice to a semver prerelease suffix, if any."""
+    if stability == "stable":
+        return None
+    return stability
 
 
 def strip_tag_version(tag: str) -> str:
-    """Remove known tag prefixes so datever parsing can inspect the version."""
+    """Remove known tag prefixes so version parsing can inspect the semver."""
     for prefix in ("internal@", "v"):
         if tag.startswith(prefix):
             return tag[len(prefix) :]
@@ -183,22 +201,26 @@ def get_next_ot2_tag_command(
     release_type: str,
     state: RepoState,
     branch: str,
+    stability: Ot2Stability = "stable",
 ) -> Tuple[str, str]:
-    """Return the next OT-2 datever tag for the same calendar day as the base version."""
-    year, month, day, _ = decode_ot2_datever(version)
+    """Return the next OT-2 semver tag for the same calendar day and stability channel."""
+    year, month, day, _, _ = decode_ot2_version(version)
+    expected_prerelease = ot2_prerelease_for_stability(stability)
 
-    same_day_releases: List[int] = []
+    same_day_builds: List[int] = []
     for pat_tags in state.branch_tags.get(branch, {}).values():
         for tag in pat_tags:
             try:
-                tag_year, tag_month, tag_day, tag_release = decode_ot2_datever(strip_tag_version(tag))
+                tag_year, tag_month, tag_day, tag_build, tag_prerelease = decode_ot2_version(strip_tag_version(tag))
             except ValueError:
                 continue
-            if (tag_year, tag_month, tag_day) == (year, month, day):
-                same_day_releases.append(tag_release)
+            if (tag_year, tag_month, tag_day) == (year, month, day) and tag_prerelease == expected_prerelease:
+                same_day_builds.append(tag_build)
 
-    next_release = max(same_day_releases, default=0) + 1
-    next_version = encode_ot2_datever(year, month, day, next_release)
+    next_build = max(same_day_builds, default=0) + 1
+    next_version = encode_ot2_version(year, month, day, next_build)
+    if expected_prerelease is not None:
+        next_version = f"{next_version}-{expected_prerelease}"
     tag_prefix = "v" if release_type == "external" else "internal@"
     next_tag = f"{tag_prefix}{next_version}"
     cmd = f"git tag -a {next_tag} -m 'chore(release): {next_tag}' && git log --oneline -n 10"
@@ -216,7 +238,15 @@ def get_next_tag_command(
 ) -> Tuple[str, str]:
     """Return the git command and next tag name for the next annotated tag."""
     if release_path is not None and release_path.name == "ot2":
-        return get_next_ot2_tag_command(repo, version, release_type, state, branch)
+        ot2_stability = stability if stability in ("stable", "alpha", "beta") else "stable"
+        return get_next_ot2_tag_command(
+            repo,
+            version,
+            release_type,
+            state,
+            branch,
+            ot2_stability,  # type: ignore[arg-type]
+        )
 
     # Determine tag pattern
     if stability == "unstable":
@@ -430,13 +460,13 @@ def repos_to_sync(path: ReleasePath) -> List[RepoSpec]:
 def prompt_release_version(release_path: ReleasePath) -> str:
     """Prompt for the base release version appropriate to the selected robot path."""
     if release_path.name == "ot2":
-        default_version = ot2_datever_for_date(date.today())
+        default_version = ot2_version_for_date()
         while True:
-            version = Prompt.ask("Base version (OT-2 datever YY.M.D)", default=default_version)
+            version = Prompt.ask("Base version (OT-2 semver YY.M.DNN)", default=default_version)
             try:
-                decode_ot2_datever(version.lstrip("v"))
+                decode_ot2_version(version.lstrip("v"))
             except ValueError as err:
-                console.print(f"[red]Invalid OT-2 datever: {err}[/]")
+                console.print(f"[red]Invalid OT-2 version: {err}[/]")
                 continue
             return version.lstrip("v")
 
@@ -467,11 +497,11 @@ def main() -> None:
     sync_repos = repos_to_sync(release_path)
     release_type = Prompt.ask("Release type", choices=["internal", "external"], default="external")
     if release_path.name == "ot2":
-        stability = "stable"
+        stability = Prompt.ask("Stability", choices=["stable", "alpha", "beta"], default="stable")
         version = prompt_release_version(release_path)
         console.print(
             f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
-            f"Version: [bold]{version}[/]\n"
+            f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"
         )
     else:
         stability = Prompt.ask("Stability", choices=["stable", "unstable"], default="unstable")
@@ -538,9 +568,7 @@ def main() -> None:
                 show_changes_since_tag(repo, branch, tag)
             # Print next tag command for taggable app repos
             try:
-                cmd, next_tag = get_next_tag_command(
-                    repo, version, stability, st, branch, release_type, release_path
-                )
+                cmd, next_tag = get_next_tag_command(repo, version, stability, st, branch, release_type, release_path)
                 console.print(f"[bold green]Next tag command for {repo.name}:[/] {cmd}")
             except Exception as e:
                 console.print(f"[yellow]No next tag for {repo.name}: {e}")
@@ -561,9 +589,7 @@ def main() -> None:
                 show_changes_since_tag(repo, branch, tag)
             # Print next tag command for taggable app repos
             try:
-                cmd, next_tag = get_next_tag_command(
-                    repo, version, stability, st, branch, release_type, release_path
-                )
+                cmd, next_tag = get_next_tag_command(repo, version, stability, st, branch, release_type, release_path)
                 console.print(f"[bold green]Next tag command for {repo.name}:[/] {cmd}")
             except Exception as e:
                 console.print(f"[yellow]No next tag for {repo.name}: {e}")

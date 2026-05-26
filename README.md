@@ -24,34 +24,45 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 | Path | Repos | App repo | Version scheme |
 |---|---|---|---|
 | **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Semver (`v8.5.0`, alpha tags like `v8.5.0-alpha.6`) |
-| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Datever (`26.5.2401`) |
+| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver (`v26.5.2601`) |
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo. It is not included in release tables or tagging.
 
 Each repo uses isolation branches named `chore_release-<version>` during a release cycle.
 
-## OT-2 Datever
+## OT-2 calendar semver
 
-OT-2 releases do not share Flex semver. They use a date-based version: `YY.M.P`.
+The OT-2 app and robot OS share the same version string. Electron-updater requires semver, so OT-2 uses semver-shaped versions with calendar components instead of Flex-style product semver.
 
-`P` encodes the calendar day and same-day release count:
+Calendar components use **US Eastern** (`America/New_York`):
+
+| Component | Meaning | Example (May 26, 2026) |
+|---|---|---|
+| **Major (YY)** | Two-digit year | `26` |
+| **Minor (M)** | Month (no leading zero) | `5` |
+| **Patch (DNN)** | Day + same-day build number | `2601` (day 26, build 01) |
+
+Single-digit days stay single-digit in the patch (semver does not allow leading zeros on numeric identifiers). The patch encodes day and build as:
 
 ```text
-P = day * 100 + release_num
+DNN = day * 100 + build_num
 ```
 
-Patch width depends on the day:
-
-| Day | Patch width | First release | Second release |
+| Day | Patch width | First build | Second build |
 |---|---|---|---|
 | 1-9 | 3 digits | `26.5.101` | `26.5.102` |
 | 10-31 | 4 digits | `26.5.1001` | `26.5.1002` |
-| 24 (example) | 4 digits | `26.5.2401` | `26.5.2402` |
+| 26 (example) | 4 digits | `26.5.2601` | `26.5.2602` |
 
-- `release_num` runs from 1 to 99 for multiple releases on the same day
-- External tags prefix with `v` (e.g. `v26.5.2401`)
-- Internal tags prefix with `internal@` (e.g. `internal@26.5.2402`)
+`build_num` runs from 1 to 99 for multiple releases on the same day within a stability channel (stable, alpha, or beta).
 
-The fixed-width patch avoids ambiguity between single-digit and two-digit days (for example, day 1 `101` vs day 10 `1001`).
+### Tags
 
-Implementation lives in `automation/go.py` (`encode_ot2_datever`, `decode_ot2_datever`).
+| Channel | Stable | Alpha | Beta |
+|---|---|---|---|
+| External | `v26.5.2601` | `v26.5.2601-alpha` | `v26.5.2601-beta` |
+| Internal | `internal@26.5.2601` | `internal@26.5.2601-alpha` | `internal@26.5.2601-beta` |
+
+Same-day follow-up builds increment the build number in the patch (`2601` → `2602`), keeping the same `-alpha` or `-beta` suffix when applicable.
+
+Implementation lives in `automation/go.py` (`encode_ot2_version`, `decode_ot2_version`, `ot2_version_for_date`).

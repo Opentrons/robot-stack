@@ -22,7 +22,7 @@ The system supports internal and external release channels. This tool helps enfo
 | Path | Repos synced | App repo (tagging) | Version scheme |
 |---|---|---|---|
 | **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Semver with `v` prefix (e.g. `v8.5.0`, `v8.5.0-alpha.6`) |
-| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Datever (see below) |
+| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver (see below) |
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo, but is not included in release tables or tagging.
 
@@ -45,20 +45,27 @@ Isolation branches follow `chore_release-<version>` in each repo.
 - Prefer `Grep`, `SemanticSearch`, and `Read` on these paths over `gh api` / remote fetches for implementation details.
 - `automation/` in this repo orchestrates releases; stack behavior lives in the cloned repos.
 
-### OT-2 Datever
+### OT-2 calendar semver
 
-OT-2 releases use `YY.M.P` where `P = day * 100 + release_num`.
+The OT-2 app and robot OS share the same version. Electron-updater requires semver, so OT-2 uses semver format with calendar components (not Flex product semver).
 
-Patch width is determined by the day:
+Calendar components use **US Eastern** (`America/New_York`):
 
-- **Single-digit days (1-9):** 3-digit patch
-  - May 1, release 1 → `26.5.101`
-  - May 9, release 2 → `26.5.902`
-- **Two-digit days (10-31):** 4-digit patch
-  - May 10, release 1 → `26.5.1001`
-  - May 24, release 2 → `26.5.2402`
+- **Major (YY):** two-digit year (2026 → `26`; breaks after 2099)
+- **Minor (M):** month without leading zeros (May → `5`)
+- **Patch (DNN):** `day * 100 + build_num` where `build_num` is the Nth build that day in the same stability channel (1-99)
 
-Same-day follow-up releases increment `release_num` (1-99). External tags use a `v` prefix; internal tags use `internal@`.
+Single-digit days stay single-digit in the patch (no leading zeros on semver numeric identifiers).
+
+Examples for May 26, 2026:
+
+- First stable internal build: `internal@26.5.2601`
+- First stable external build: `v26.5.2601`
+- First alpha internal build: `internal@26.5.2601-alpha`
+- Second alpha internal build same day: `internal@26.5.2602-alpha`
+- Beta builds use `-beta` instead of `-alpha`
+
+External tags use a `v` prefix; internal tags use `internal@`.
 
 ## Development Standards
 
