@@ -47,23 +47,24 @@ Isolation branches follow `chore_release-<version>` in each repo.
 
 ### OT-2 calendar semver
 
-The OT-2 app and robot OS share the same version. Electron-updater requires semver, so OT-2 uses semver format with calendar components (not Flex product semver).
+OT-2 uses semver format for electron-updater. **Internal and external channels use different patch schemes.** Within a channel, app and robot share the same version.
 
 Calendar components use **US Eastern** (`America/New_York`):
 
 - **Major (YY):** two-digit year (2026 → `26`; breaks after 2099)
-- **Minor (M):** month without leading zeros (May → `5`)
-- **Patch (DNN):** `day * 100 + build_num` where `build_num` is the Nth build that day in the same stability channel (1-99)
+- **Minor (M):** month without leading zeros (June → `6`)
 
-Single-digit days stay single-digit in the patch (no leading zeros on semver numeric identifiers).
+**Internal (`internal@`):** patch is `DNN = day * 100 + build_num` (build 1–99 per day). Same-day bumps increment DNN. Alpha/beta use bare `-alpha` / `-beta` suffixes.
 
-Examples for May 26, 2026:
+Examples (May 26, 2026):
 
-- First stable internal build: `internal@26.5.2601`
-- First stable external build: `v26.5.2601`
-- First alpha internal build: `internal@26.5.2601-alpha`
-- Second alpha internal build same day: `internal@26.5.2602-alpha`
-- Beta builds use `-beta` instead of `-alpha`
+- `internal@26.5.2601` (first stable internal)
+- `internal@26.5.2601-alpha` (first alpha internal)
+- `internal@26.5.2602-alpha` (second alpha internal same day)
+
+**External (`v`):** patch **N** is monthly release counter **0–9** (first release in June 2026 → `v26.6.0`). More than 10 stable externals per month is a process failure.
+
+External alpha/beta use semver prerelease numbering on a fixed base: `v26.6.0-alpha.0`, `v26.6.0-alpha.1`, `v26.6.0-beta.0`.
 
 External tags use a `v` prefix; internal tags use `internal@`.
 

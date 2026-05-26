@@ -49,12 +49,16 @@ class RepoState:
 
 
 # ------------------------------------------------------------------------------
-# OT-2 calendar semver (app + robot share the same version string)
+# OT-2 calendar semver (internal and external use different patch schemes)
 # ------------------------------------------------------------------------------
 
 
 OT2_RELEASE_TZ = ZoneInfo("America/New_York")
-OT2_VERSION_RE = re.compile(r"^(\d{2})\.(\d{1,2})\.(\d+)(?:-(alpha|beta))?$")
+OT2_MONTH_CAP = r"([1-9]|1[0-2])"
+OT2_INTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.(\d+)(?:-(alpha|beta))?$")
+OT2_EXTERNAL_VERSION_RE = re.compile(
+    rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.([0-9])(?:-(alpha|beta)\.(\d+))?$"
+)
 Ot2Stability = Literal["stable", "alpha", "beta"]
 
 
@@ -63,8 +67,8 @@ def ot2_release_date_today() -> date:
     return datetime.now(OT2_RELEASE_TZ).date()
 
 
-def encode_ot2_version(year: int, month: int, day: int, build_num: int = 1) -> str:
-    """Encode OT-2 semver: YY.M.DNN where DNN = day * 100 + same-day build number."""
+def encode_ot2_internal_version(year: int, month: int, day: int, build_num: int = 1) -> str:
+    """Encode internal semver: YY.M.DNN where DNN = day * 100 + same-day build number."""
     if build_num < 1 or build_num > 99:
         raise ValueError("build_num must be between 1 and 99")
     if day < 1 or day > 31:
@@ -75,12 +79,12 @@ def encode_ot2_version(year: int, month: int, day: int, build_num: int = 1) -> s
     return f"{yy}.{month}.{patch}"
 
 
-def decode_ot2_version(version: str) -> Tuple[int, int, int, int, Optional[str]]:
-    """Decode OT-2 semver into (year, month, day, build_num, prerelease)."""
+def decode_ot2_internal_version(version: str) -> Tuple[int, int, int, int, Optional[str]]:
+    """Decode internal semver into (year, month, day, build_num, prerelease)."""
     clean = version.lstrip("v")
-    match = OT2_VERSION_RE.match(clean)
+    match = OT2_INTERNAL_VERSION_RE.match(clean)
     if match is None:
-        raise ValueError(f"Invalid OT-2 version: {version}")
+        raise ValueError(f"Invalid OT-2 internal version: {version}")
 
     yy = int(match.group(1))
     month = int(match.group(2))
@@ -100,21 +104,70 @@ def decode_ot2_version(version: str) -> Tuple[int, int, int, int, Optional[str]]
         if 10 <= day <= 31 and build_num >= 1:
             return year, month, day, build_num, prerelease
 
-    raise ValueError(f"Invalid OT-2 version patch component: {version}")
+    raise ValueError(f"Invalid OT-2 internal version patch component: {version}")
 
 
-def ot2_version_for_date(release_date: date | None = None, build_num: int = 1) -> str:
-    """Return the OT-2 semver string for a calendar date (Eastern by default)."""
+def encode_ot2_external_version(
+    year: int,
+    month: int,
+    release_num: int = 0,
+    prerelease: Optional[str] = None,
+    prerelease_num: Optional[int] = None,
+) -> str:
+    """Encode external semver: YY.M.N with optional -alpha.N or -beta.N."""
+    if release_num < 0 or release_num > 9:
+        raise ValueError("release_num must be between 0 and 9")
+    yy = year % 100
+    version = f"{yy}.{month}.{release_num}"
+    if prerelease is not None:
+        if prerelease_num is None:
+            raise ValueError("prerelease_num required when prerelease is set")
+        version = f"{version}-{prerelease}.{prerelease_num}"
+    return version
+
+
+def decode_ot2_external_version(
+    version: str,
+) -> Tuple[int, int, int, Optional[str], Optional[int]]:
+    """Decode external semver into (year, month, release_num, prerelease, prerelease_num)."""
+    clean = version.lstrip("v")
+    match = OT2_EXTERNAL_VERSION_RE.match(clean)
+    if match is None:
+        raise ValueError(f"Invalid OT-2 external version: {version}")
+
+    yy = int(match.group(1))
+    month = int(match.group(2))
+    release_num = int(match.group(3))
+    prerelease = match.group(4)
+    prerelease_num = int(match.group(5)) if match.group(5) is not None else None
+    return 2000 + yy, month, release_num, prerelease, prerelease_num
+
+
+def ot2_internal_version_for_date(release_date: date | None = None, build_num: int = 1) -> str:
+    """Return internal semver for a calendar date (Eastern by default)."""
     if release_date is None:
         release_date = ot2_release_date_today()
-    return encode_ot2_version(release_date.year, release_date.month, release_date.day, build_num)
+    return encode_ot2_internal_version(release_date.year, release_date.month, release_date.day, build_num)
+
+
+def ot2_external_version_for_month(release_date: date | None = None, release_num: int = 0) -> str:
+    """Return external semver for the calendar month (Eastern), N starting at 0."""
+    if release_date is None:
+        release_date = ot2_release_date_today()
+    return encode_ot2_external_version(release_date.year, release_date.month, release_num)
 
 
 def ot2_prerelease_for_stability(stability: Ot2Stability) -> Optional[str]:
-    """Map OT-2 stability choice to a semver prerelease suffix, if any."""
+    """Map OT-2 internal stability choice to a bare semver prerelease suffix, if any."""
     if stability == "stable":
         return None
     return stability
+
+
+# Backward-compatible aliases
+encode_ot2_version = encode_ot2_internal_version
+decode_ot2_version = decode_ot2_internal_version
+ot2_version_for_date = ot2_internal_version_for_date
 
 
 def strip_tag_version(tag: str) -> str:
@@ -203,25 +256,62 @@ def get_next_ot2_tag_command(
     branch: str,
     stability: Ot2Stability = "stable",
 ) -> Tuple[str, str]:
-    """Return the next OT-2 semver tag for the same calendar day and stability channel."""
-    year, month, day, _, _ = decode_ot2_version(version)
-    expected_prerelease = ot2_prerelease_for_stability(stability)
-
-    same_day_builds: List[int] = []
-    for pat_tags in state.branch_tags.get(branch, {}).values():
-        for tag in pat_tags:
-            try:
-                tag_year, tag_month, tag_day, tag_build, tag_prerelease = decode_ot2_version(strip_tag_version(tag))
-            except ValueError:
-                continue
-            if (tag_year, tag_month, tag_day) == (year, month, day) and tag_prerelease == expected_prerelease:
-                same_day_builds.append(tag_build)
-
-    next_build = max(same_day_builds, default=0) + 1
-    next_version = encode_ot2_version(year, month, day, next_build)
-    if expected_prerelease is not None:
-        next_version = f"{next_version}-{expected_prerelease}"
+    """Return the next OT-2 semver tag for the selected release channel and stability."""
     tag_prefix = "v" if release_type == "external" else "internal@"
+
+    if release_type == "external":
+        year, month, release_num, _, _ = decode_ot2_external_version(version)
+        if stability == "stable":
+            same_month_nums: List[int] = []
+            for pat_tags in state.branch_tags.get(branch, {}).values():
+                for tag in pat_tags:
+                    try:
+                        clean = strip_tag_version(tag)
+                        tag_year, tag_month, tag_n, tag_pre, _ = decode_ot2_external_version(clean)
+                    except ValueError:
+                        continue
+                    if (tag_year, tag_month) == (year, month) and tag_pre is None:
+                        same_month_nums.append(tag_n)
+            next_num = max(same_month_nums, default=-1) + 1
+            if next_num > 9:
+                raise ValueError("More than 10 external stable releases this month (N > 9)")
+            next_version = encode_ot2_external_version(year, month, next_num)
+        else:
+            same_pre_nums: List[int] = []
+            for pat_tags in state.branch_tags.get(branch, {}).values():
+                for tag in pat_tags:
+                    try:
+                        clean = strip_tag_version(tag)
+                        tag_year, tag_month, tag_n, tag_pre, tag_pre_num = decode_ot2_external_version(clean)
+                    except ValueError:
+                        continue
+                    if (
+                        (tag_year, tag_month, tag_n) == (year, month, release_num)
+                        and tag_pre == stability
+                        and tag_pre_num is not None
+                    ):
+                        same_pre_nums.append(tag_pre_num)
+            next_pre_num = max(same_pre_nums, default=-1) + 1
+            next_version = encode_ot2_external_version(year, month, release_num, stability, next_pre_num)
+    else:
+        year, month, day, _, _ = decode_ot2_internal_version(version)
+        expected_prerelease = ot2_prerelease_for_stability(stability)
+
+        same_day_builds: List[int] = []
+        for pat_tags in state.branch_tags.get(branch, {}).values():
+            for tag in pat_tags:
+                try:
+                    tag_year, tag_month, tag_day, tag_build, tag_prerelease = decode_ot2_internal_version(strip_tag_version(tag))
+                except ValueError:
+                    continue
+                if (tag_year, tag_month, tag_day) == (year, month, day) and tag_prerelease == expected_prerelease:
+                    same_day_builds.append(tag_build)
+
+        next_build = max(same_day_builds, default=0) + 1
+        next_version = encode_ot2_internal_version(year, month, day, next_build)
+        if expected_prerelease is not None:
+            next_version = f"{next_version}-{expected_prerelease}"
+
     next_tag = f"{tag_prefix}{next_version}"
     cmd = f"git tag -a {next_tag} -m 'chore(release): {next_tag}' && git log --oneline -n 10"
     return cmd, next_tag
@@ -457,16 +547,28 @@ def repos_to_sync(path: ReleasePath) -> List[RepoSpec]:
     return [repo for repo in repos if repo.name in names]
 
 
-def prompt_release_version(release_path: ReleasePath) -> str:
+def prompt_release_version(release_path: ReleasePath, release_type: str = "external") -> str:
     """Prompt for the base release version appropriate to the selected robot path."""
     if release_path.name == "ot2":
-        default_version = ot2_version_for_date()
+        if release_type == "external":
+            default_version = ot2_external_version_for_month()
+            prompt_label = "Base version (OT-2 external YY.M.N)"
+            while True:
+                version = Prompt.ask(prompt_label, default=default_version)
+                try:
+                    decode_ot2_external_version(version.lstrip("v"))
+                except ValueError as err:
+                    console.print(f"[red]Invalid OT-2 external version: {err}[/]")
+                    continue
+                return version.lstrip("v")
+
+        default_version = ot2_internal_version_for_date()
         while True:
-            version = Prompt.ask("Base version (OT-2 semver YY.M.DNN)", default=default_version)
+            version = Prompt.ask("Base version (OT-2 internal YY.M.DNN)", default=default_version)
             try:
-                decode_ot2_version(version.lstrip("v"))
+                decode_ot2_internal_version(version.lstrip("v"))
             except ValueError as err:
-                console.print(f"[red]Invalid OT-2 version: {err}[/]")
+                console.print(f"[red]Invalid OT-2 internal version: {err}[/]")
                 continue
             return version.lstrip("v")
 
@@ -498,14 +600,14 @@ def main() -> None:
     release_type = Prompt.ask("Release type", choices=["internal", "external"], default="external")
     if release_path.name == "ot2":
         stability = Prompt.ask("Stability", choices=["stable", "alpha", "beta"], default="stable")
-        version = prompt_release_version(release_path)
+        version = prompt_release_version(release_path, release_type)
         console.print(
             f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
             f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"
         )
     else:
         stability = Prompt.ask("Stability", choices=["stable", "unstable"], default="unstable")
-        version = prompt_release_version(release_path)
+        version = prompt_release_version(release_path, release_type)
         console.print(
             f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
             f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"

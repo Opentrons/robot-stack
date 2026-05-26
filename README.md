@@ -24,7 +24,7 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 | Path | Repos | App repo | Version scheme |
 |---|---|---|---|
 | **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Semver (`v8.5.0`, alpha tags like `v8.5.0-alpha.6`) |
-| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver (`v26.5.2601`) |
+| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver (internal + external; see below) |
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo. It is not included in release tables or tagging.
 
@@ -32,37 +32,45 @@ Each repo uses isolation branches named `chore_release-<version>` during a relea
 
 ## OT-2 calendar semver
 
-The OT-2 app and robot OS share the same version string. Electron-updater requires semver, so OT-2 uses semver-shaped versions with calendar components instead of Flex-style product semver.
+OT-2 uses semver-shaped versions so electron-updater and robot update checks work. **Internal and external channels use different patch schemes.** Within a channel, the app and robot OS share the same version string.
 
 Calendar components use **US Eastern** (`America/New_York`):
 
-| Component | Meaning | Example (May 26, 2026) |
-|---|---|---|
-| **Major (YY)** | Two-digit year | `26` |
-| **Minor (M)** | Month (no leading zero) | `5` |
-| **Patch (DNN)** | Day + same-day build number | `2601` (day 26, build 01) |
+| Component | Meaning |
+|---|---|
+| **Major (YY)** | Two-digit year (`2026` → `26`) |
+| **Minor (M)** | Month, no leading zero (`June` → `6`) |
 
-Single-digit days stay single-digit in the patch (semver does not allow leading zeros on numeric identifiers). The patch encodes day and build as:
+### Internal (`internal@`)
 
-```text
-DNN = day * 100 + build_num
-```
+Patch encodes **day + same-day build** as `DNN = day * 100 + build_num` (build 1–99 per day).
 
-| Day | Patch width | First build | Second build |
-|---|---|---|---|
-| 1-9 | 3 digits | `26.5.101` | `26.5.102` |
-| 10-31 | 4 digits | `26.5.1001` | `26.5.1002` |
-| 26 (example) | 4 digits | `26.5.2601` | `26.5.2602` |
+| Example | Meaning |
+|---|---|
+| `internal@26.5.2601` | First stable internal build on May 26, 2026 |
+| `internal@26.5.2602-alpha` | Second alpha internal build that day |
+| `internal@26.5.101` | First stable internal build on May 1, 2026 |
 
-`build_num` runs from 1 to 99 for multiple releases on the same day within a stability channel (stable, alpha, or beta).
+Same-day follow-ups increment the build number in the patch (`2601` → `2602`).
 
-### Tags
+### External (`v`)
+
+Patch **N** is the monthly release counter, **starting at 0**. At most 10 stable external releases per month (`N` = 0–9).
+
+| Example | Meaning |
+|---|---|
+| `v26.6.0` | First stable external release in June 2026 |
+| `v26.6.1` | Second stable external release that month |
+| `v26.6.0-alpha.0` | First external alpha on base `26.6.0` |
+| `v26.6.0-alpha.1` | Second external alpha on the same base |
+
+External alpha and beta builds use standard semver prerelease numbering (`-alpha.0`, `-alpha.1`, `-beta.0`, …) on a fixed `YY.M.N` base instead of bumping the patch.
+
+### Summary
 
 | Channel | Stable | Alpha | Beta |
 |---|---|---|---|
-| External | `v26.5.2601` | `v26.5.2601-alpha` | `v26.5.2601-beta` |
+| External | `v26.6.0` | `v26.6.0-alpha.0` | `v26.6.0-beta.0` |
 | Internal | `internal@26.5.2601` | `internal@26.5.2601-alpha` | `internal@26.5.2601-beta` |
 
-Same-day follow-up builds increment the build number in the patch (`2601` → `2602`), keeping the same `-alpha` or `-beta` suffix when applicable.
-
-Implementation lives in `automation/go.py` (`encode_ot2_version`, `decode_ot2_version`, `ot2_version_for_date`).
+Implementation lives in `automation/go.py` and `opentrons-ot2/scripts/ot2_calendar_semver.py`.
