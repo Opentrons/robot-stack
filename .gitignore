@@ -190,3 +190,7 @@ cython_debug/
 
 z.md
 z.sh
+
+# generated local reports
+.build/
+pages/

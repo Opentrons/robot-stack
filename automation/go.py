@@ -56,9 +56,7 @@ class RepoState:
 OT2_RELEASE_TZ = ZoneInfo("America/New_York")
 OT2_MONTH_CAP = r"([1-9]|1[0-2])"
 OT2_INTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.(\d+)(?:-(alpha|beta))?$")
-OT2_EXTERNAL_VERSION_RE = re.compile(
-    rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.([0-9])(?:-(alpha|beta)\.(\d+))?$"
-)
+OT2_EXTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.([0-9])(?:-(alpha|beta)\.(\d+))?$")
 Ot2Stability = Literal["stable", "alpha", "beta"]
 
 
@@ -328,14 +326,16 @@ def get_next_tag_command(
 ) -> Tuple[str, str]:
     """Return the git command and next tag name for the next annotated tag."""
     if release_path is not None and release_path.name == "ot2":
-        ot2_stability = stability if stability in ("stable", "alpha", "beta") else "stable"
+        ot2_stability: Ot2Stability = (
+            "alpha" if stability == "alpha" else "beta" if stability == "beta" else "stable"
+        )
         return get_next_ot2_tag_command(
             repo,
             version,
             release_type,
             state,
             branch,
-            ot2_stability,  # type: ignore[arg-type]
+            ot2_stability,
         )
 
     # Determine tag pattern
