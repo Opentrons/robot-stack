@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+import semver
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -48,11 +49,24 @@ class RepoState:
     overall_tags: Dict[str, Optional[str]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class TagPlan:
+    """Whether a repo needs a new tag and what to create if so."""
+
+    needs_tag: bool
+    latest_tag: Optional[str]
+    next_tag: Optional[str]
+    branch: str
+    reason: str
+
+
 # ------------------------------------------------------------------------------
 # OT-2 calendar semver (internal and external use different patch schemes)
 # ------------------------------------------------------------------------------
 
 
+OT3_FIRMWARE_EXTERNAL_TAG_RE = re.compile(r"^v(\d+)$")
+OT3_FIRMWARE_INTERNAL_TAG_RE = re.compile(r"^internal@v(\d+)$")
 OT2_RELEASE_TZ = ZoneInfo("America/New_York")
 OT2_MONTH_CAP = r"([1-9]|1[0-2])"
 OT2_INTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.(\d+)(?:-(alpha|beta))?$")
@@ -253,7 +267,7 @@ def get_next_ot2_tag_command(
     state: RepoState,
     branch: str,
     stability: Ot2Stability = "stable",
-) -> Tuple[str, str]:
+) -> str:
     """Return the next OT-2 semver tag for the selected release channel and stability."""
     tag_prefix = "v" if release_type == "external" else "internal@"
 
@@ -311,8 +325,226 @@ def get_next_ot2_tag_command(
             next_version = f"{next_version}-{expected_prerelease}"
 
     next_tag = f"{tag_prefix}{next_version}"
-    cmd = f"git tag -a {next_tag} -m 'chore(release): {next_tag}' && git log --oneline -n 10"
-    return cmd, next_tag
+    return next_tag
+
+
+def format_tag_commands(next_tag: str) -> Tuple[str, str, str]:
+    """Return create, verify, and push commands for an annotated release tag."""
+    create = f"git tag -a {next_tag} -m 'chore(release): {next_tag}'"
+    verify = f"git log {next_tag} --oneline -n 10"
+    push = f"git push origin {next_tag}"
+    return create, verify, push
+
+
+def release_branch_for_repo(state: RepoState, repo: RepoSpec, version: str) -> str:
+    """Return chore_release when present, otherwise the repo default branch."""
+    chore = chore_release_branch(version)
+    return chore if chore in state.branch_tags else repo.default_branch
+
+
+def branch_head_commit(repo: RepoSpec, branch: str) -> str:
+    """Return the commit hash at the tip of a local branch."""
+    return run_git_command(["rev-parse", branch], cwd=repo.local_path)
+
+
+def tag_commit(repo: RepoSpec, tag: str) -> str:
+    """Return the commit hash an annotated or lightweight tag points to."""
+    return run_git_command(["rev-list", "-n", "1", tag], cwd=repo.local_path)
+
+
+def latest_channel_tag(state: RepoState, repo: RepoSpec, branch: str, release_type: str) -> Optional[str]:
+    """Return the newest tag on branch for the selected release channel."""
+    pattern = repo.external_tag_pattern if release_type == "external" else repo.internal_tag_pattern
+    tags = state.branch_tags.get(branch, {}).get(pattern, [])
+    return tags[0] if tags else None
+
+
+def needs_new_tag(repo: RepoSpec, branch: str, latest_tag: Optional[str]) -> bool:
+    """Return True when branch HEAD is ahead of the latest channel tag."""
+    if latest_tag is None:
+        return True
+    return branch_head_commit(repo, branch) != tag_commit(repo, latest_tag)
+
+
+def tags_merged_on_branch(state: RepoState, branch: str) -> List[str]:
+    """Return all tags collected for a branch across channel patterns."""
+    tags: List[str] = []
+    for pattern_tags in state.branch_tags.get(branch, {}).values():
+        tags.extend(pattern_tags)
+    return tags
+
+
+def next_alpha_tag(tag_prefix: str, tags: List[str]) -> str:
+    """Return the next tag for a fixed alpha prefix such as v8.5.0-alpha."""
+    matching = [tag for tag in tags if tag.startswith(tag_prefix)]
+    numbers: List[int] = []
+    for tag in matching:
+        match = re.match(rf"{re.escape(tag_prefix)}(\d+)", tag)
+        if match is not None:
+            numbers.append(int(match.group(1)))
+    next_num = max(numbers) + 1 if numbers else 0
+    return f"{tag_prefix}{next_num}"
+
+
+def oe_core_internal_base_version(state: RepoState, branch: str) -> str:
+    """Parse the semver base from the newest internal@ tag on a branch."""
+    internal_tags = state.branch_tags.get(branch, {}).get("internal@", [])
+    if not internal_tags:
+        raise ValueError("No internal@ tags merged into branch")
+
+    clean = strip_tag_version(internal_tags[0])
+    match = re.match(r"^(\d+\.\d+\.\d+)", clean)
+    if match is None:
+        raise ValueError(f"Cannot parse oe-core internal base from {internal_tags[0]}")
+    return match.group(1)
+
+
+def get_next_oe_core_tag_command(
+    state: RepoState,
+    branch: str,
+    release_type: str,
+    stability: str,
+) -> str:
+    """Suggest the next oe-core tag from tags merged into the release branch."""
+    branch_tags = tags_merged_on_branch(state, branch)
+
+    if release_type == "internal":
+        base = oe_core_internal_base_version(state, branch)
+        if stability == "unstable":
+            return next_alpha_tag(f"internal@{base}-alpha.", branch_tags)
+
+        candidate = f"internal@{base}"
+        if candidate not in branch_tags:
+            return candidate
+        next_version = semver.VersionInfo.parse(base).bump_patch()
+        return f"internal@{next_version}"
+
+    external_tags = state.branch_tags.get(branch, {}).get("v", [])
+    if not external_tags:
+        raise ValueError("No external v* tags merged into branch")
+
+    latest = external_tags[0]
+    next_version = semver.VersionInfo.parse(strip_tag_version(latest)).bump_patch()
+    return f"v{next_version}"
+
+
+def max_ot3_firmware_tag_number(state: RepoState, branch: str, release_type: str) -> int:
+    """Return the highest integer firmware tag number merged into a branch."""
+    pattern = "v" if release_type == "external" else "internal@"
+    tag_re = OT3_FIRMWARE_EXTERNAL_TAG_RE if release_type == "external" else OT3_FIRMWARE_INTERNAL_TAG_RE
+    numbers: List[int] = []
+    for tag in state.branch_tags.get(branch, {}).get(pattern, []):
+        match = tag_re.match(tag)
+        if match is not None:
+            numbers.append(int(match.group(1)))
+    if not numbers:
+        raise ValueError(f"No {pattern}* tags merged into branch")
+    return max(numbers)
+
+
+def get_next_ot3_firmware_tag_command(
+    state: RepoState,
+    branch: str,
+    release_type: str,
+) -> str:
+    """Suggest the next ot3-firmware tag (vN or internal@vN) from branch tags."""
+    next_num = max_ot3_firmware_tag_number(state, branch, release_type) + 1
+    if release_type == "external":
+        return f"v{next_num}"
+    return f"internal@v{next_num}"
+
+
+def get_next_stack_repo_tag(
+    repo: RepoSpec,
+    state: RepoState,
+    branch: str,
+    version: str,
+    release_type: str,
+    stability: str,
+    release_path: ReleasePath,
+) -> str:
+    """Suggest the next tag for a stack repo that is not the app monorepo."""
+    if repo.name == "buildroot":
+        return get_next_ot2_tag_command(
+            repo,
+            version,
+            release_type,
+            state,
+            branch,
+            "alpha" if stability == "alpha" else "beta" if stability == "beta" else "stable",
+        )
+    if repo.name == "oe-core":
+        return get_next_oe_core_tag_command(state, branch, release_type, stability)
+    if repo.name == "ot3-firmware":
+        return get_next_ot3_firmware_tag_command(state, branch, release_type)
+    raise ValueError(f"No tag suggestion logic for {repo.name}")
+
+
+def get_stack_repo_tag_plan(
+    repo: RepoSpec,
+    state: RepoState,
+    version: str,
+    release_type: str,
+    stability: str,
+    release_path: ReleasePath,
+) -> TagPlan:
+    """Decide whether a stack repo needs a tag and what it should be."""
+    branch = release_branch_for_repo(state, repo, version)
+    latest_tag = latest_channel_tag(state, repo, branch, release_type)
+    needs_tag = needs_new_tag(repo, branch, latest_tag)
+
+    if not needs_tag:
+        return TagPlan(
+            needs_tag=False,
+            latest_tag=latest_tag,
+            next_tag=None,
+            branch=branch,
+            reason=f"{branch} matches {latest_tag}",
+        )
+
+    next_tag = get_next_stack_repo_tag(repo, state, branch, version, release_type, stability, release_path)
+    reason = f"commits on {branch} since {latest_tag or 'no prior channel tag'}"
+    return TagPlan(
+        needs_tag=True,
+        latest_tag=latest_tag,
+        next_tag=next_tag,
+        branch=branch,
+        reason=reason,
+    )
+
+
+def print_suggested_tag_block(label: str, next_tag: str) -> None:
+    """Print a header panel and git commands for creating and pushing a tag."""
+    create, verify, push = format_tag_commands(next_tag)
+    console.print()
+    console.print(
+        Panel(
+            f"[bold cyan]{next_tag}[/]\n\n"
+            f"[bold green]Create:[/] {create}\n"
+            f"[bold green]Verify:[/] {verify}\n"
+            f"[bold green]Push:[/]   {push}",
+            title=f"Suggested {label}",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
+
+
+def print_tag_plan(repo: RepoSpec, plan: TagPlan) -> None:
+    """Print whether a repo needs a tag and the commands to create and push it."""
+    if not plan.needs_tag:
+        console.print(f"[green]No new tag needed[/] on [bold]{plan.branch}[/] ({plan.reason})")
+        return
+
+    console.print(f"[yellow]New tag needed[/] on [bold]{plan.branch}[/] ({plan.reason})")
+    if plan.latest_tag:
+        show_changes_since_tag(repo, plan.branch, plan.latest_tag)
+
+    if plan.next_tag is None:
+        console.print("[red]Could not determine next tag[/]")
+        return
+
+    print_suggested_tag_block(f"{repo.name} tag", plan.next_tag)
 
 
 def get_next_tag_command(
@@ -323,12 +555,10 @@ def get_next_tag_command(
     branch: str,
     release_type: str = "external",
     release_path: Optional[ReleasePath] = None,
-) -> Tuple[str, str]:
-    """Return the git command and next tag name for the next annotated tag."""
+) -> str:
+    """Return the next annotated tag name for the app repo."""
     if release_path is not None and release_path.name == "ot2":
-        ot2_stability: Ot2Stability = (
-            "alpha" if stability == "alpha" else "beta" if stability == "beta" else "stable"
-        )
+        ot2_stability: Ot2Stability = "alpha" if stability == "alpha" else "beta" if stability == "beta" else "stable"
         return get_next_ot2_tag_command(
             repo,
             version,
@@ -338,35 +568,14 @@ def get_next_tag_command(
             ot2_stability,
         )
 
-    # Determine tag pattern
+    branch_tags = tags_merged_on_branch(state, branch)
     if stability == "unstable":
-        tag_prefix = f"{version}-alpha."
-    else:
-        tag_prefix = version
-    # Find all tags for this pattern
-    tags = []
-    for pat_tags in state.branch_tags.get(branch, {}).values():
-        tags.extend(pat_tags)
-    # Filter tags matching the prefix
-    matching = [t for t in tags if t.startswith(tag_prefix)]
-    # Extract numeric suffix for alpha tags
-    if stability == "unstable":
-        numbers = []
-        for t in matching:
-            m = re.match(rf"{re.escape(tag_prefix)}(\d+)", t)
-            if m is not None:
-                numbers.append(int(m.group(1)))
-        next_num = max(numbers) + 1 if numbers else 0
-        next_tag = f"{tag_prefix}{next_num}"
-    else:
-        # For stable, just use the version if not present
-        if version not in matching:
-            next_tag = version
-        else:
-            raise ValueError(f"Tag {version} already exists on {branch}")
-    # Annotated tag command
-    cmd = f"git tag -a {next_tag} -m 'chore(release): {next_tag}' && git log --oneline -n 10"
-    return cmd, next_tag
+        return next_alpha_tag(f"{version}-alpha.", branch_tags)
+
+    matching = [tag for tag in branch_tags if tag.startswith(version)]
+    if version not in matching:
+        return version
+    raise ValueError(f"Tag {version} already exists on {branch}")
 
 
 # ------------------------------------------------------------------------------
@@ -515,6 +724,14 @@ class ReleasePath:
     label: str
     repo_names: frozenset[str]
     taggable_repo: str
+    stack_tag_repos: Tuple[str, ...]
+
+
+STACK_REPO_LABELS: Dict[str, str] = {
+    "oe-core": "robot OS",
+    "ot3-firmware": "firmware",
+    "buildroot": "robot OS",
+}
 
 
 RELEASE_PATHS: Dict[str, ReleasePath] = {
@@ -523,12 +740,14 @@ RELEASE_PATHS: Dict[str, ReleasePath] = {
         label="Flex",
         repo_names=frozenset({"opentrons", "oe-core", "ot3-firmware"}),
         taggable_repo="opentrons",
+        stack_tag_repos=("oe-core", "ot3-firmware"),
     ),
     "ot2": ReleasePath(
         name="ot2",
         label="OT-2",
         repo_names=frozenset({"opentrons-ot2", "buildroot"}),
         taggable_repo="opentrons-ot2",
+        stack_tag_repos=("buildroot",),
     ),
 }
 
@@ -576,6 +795,70 @@ def prompt_release_version(release_path: ReleasePath, release_type: str = "exter
     if not version.startswith("v"):
         version = f"v{version}"
     return version
+
+
+def repo_by_name(name: str) -> RepoSpec:
+    """Return the RepoSpec for a known repo name."""
+    for repo in repos:
+        if repo.name == name:
+            return repo
+    raise KeyError(f"Unknown repo: {name}")
+
+
+def print_app_tag_section(
+    release_path: ReleasePath,
+    results: Dict[str, RepoState],
+    version: str,
+    release_type: str,
+    stability: str,
+) -> None:
+    """Print change summary and tag commands for the app repo."""
+    repo = repo_by_name(release_path.taggable_repo)
+    state = results.get(repo.name)
+    if state is None:
+        return
+
+    pattern = repo.external_tag_pattern if release_type == "external" else repo.internal_tag_pattern
+    branch = release_branch_for_repo(state, repo, version)
+    tags = state.branch_tags[branch].get(pattern, [])
+    latest_tag = tags[0] if tags else None
+    if latest_tag:
+        show_changes_since_tag(repo, branch, latest_tag)
+
+    try:
+        next_tag = get_next_tag_command(
+            repo,
+            version,
+            stability,
+            state,
+            branch,
+            release_type,
+            release_path,
+        )
+    except Exception as err:
+        console.print(f"[yellow]No next tag for {repo.name}: {err}[/]")
+        return
+
+    print_suggested_tag_block("app tag", next_tag)
+
+
+def print_stack_repo_tag_section(
+    repo_name: str,
+    release_path: ReleasePath,
+    results: Dict[str, RepoState],
+    version: str,
+    release_type: str,
+    stability: str,
+) -> None:
+    """Print whether a stack repo needs a tag and the commands to push it."""
+    repo = repo_by_name(repo_name)
+    state = results.get(repo.name)
+    if state is None:
+        console.print(f"[red]Missing sync state for {repo.name}[/]")
+        return
+
+    plan = get_stack_repo_tag_plan(repo, state, version, release_type, stability, release_path)
+    print_tag_plan(repo, plan)
 
 
 def main() -> None:
@@ -652,49 +935,19 @@ def main() -> None:
 
     console.print(summary)
 
-    # 2) Table + logs for chosen channel
+    # 2) Table + tag guidance for chosen channel
     if release_type == "external":
         print_external_table(results, active_repos, version)
-        for repo in active_repos:
-            if repo.name != release_path.taggable_repo:
-                continue
-            st = results.get(repo.name)
-            if not st:
-                continue
-            pat = repo.external_tag_pattern
-            chore = chore_release_branch(version)
-            branch = chore if chore in st.branch_tags else repo.default_branch
-            tags = st.branch_tags[branch].get(pat, [])
-            tag = tags[0] if tags else None
-            if tag:
-                show_changes_since_tag(repo, branch, tag)
-            # Print next tag command for taggable app repos
-            try:
-                cmd, next_tag = get_next_tag_command(repo, version, stability, st, branch, release_type, release_path)
-                console.print(f"[bold green]Next tag command for {repo.name}:[/] {cmd}")
-            except Exception as e:
-                console.print(f"[yellow]No next tag for {repo.name}: {e}")
     else:
         print_internal_table(results, active_repos, version)
-        for repo in active_repos:
-            if repo.name != release_path.taggable_repo:
-                continue
-            st = results.get(repo.name)
-            if not st:
-                continue
-            pat = repo.internal_tag_pattern
-            chore = chore_release_branch(version)
-            branch = chore if chore in st.branch_tags else repo.default_branch
-            tags = st.branch_tags[branch].get(pat, [])
-            tag = tags[0] if tags else None
-            if tag:
-                show_changes_since_tag(repo, branch, tag)
-            # Print next tag command for taggable app repos
-            try:
-                cmd, next_tag = get_next_tag_command(repo, version, stability, st, branch, release_type, release_path)
-                console.print(f"[bold green]Next tag command for {repo.name}:[/] {cmd}")
-            except Exception as e:
-                console.print(f"[yellow]No next tag for {repo.name}: {e}")
+
+    console.rule(f"{release_path.taggable_repo} (app) tag")
+    print_app_tag_section(release_path, results, version, release_type, stability)
+
+    for repo_name in release_path.stack_tag_repos:
+        label = STACK_REPO_LABELS.get(repo_name, repo_name)
+        console.rule(f"{repo_name} ({label}) tag")
+        print_stack_repo_tag_section(repo_name, release_path, results, version, release_type, stability)
 
 
 if __name__ == "__main__":
