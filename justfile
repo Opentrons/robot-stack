@@ -10,6 +10,10 @@
 @go:
     uv run ./automation/go.py
 
+# find GitHub Actions build jobs for a pushed OT-2 or Flex release tag
+@track-builds *args:
+    uv run ./automation/track_builds.py {{args}}
+
 # format and lint with ruff
 @fix:
     uv run ruff format .

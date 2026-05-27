@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple, cast
 from zoneinfo import ZoneInfo
 
 import semver
@@ -740,7 +740,7 @@ RELEASE_PATHS: Dict[str, ReleasePath] = {
         label="Flex",
         repo_names=frozenset({"opentrons", "oe-core", "ot3-firmware"}),
         taggable_repo="opentrons",
-        stack_tag_repos=("oe-core", "ot3-firmware"),
+        stack_tag_repos=("ot3-firmware", "oe-core"),
     ),
     "ot2": ReleasePath(
         name="ot2",
@@ -805,6 +805,35 @@ def repo_by_name(name: str) -> RepoSpec:
     raise KeyError(f"Unknown repo: {name}")
 
 
+def compute_app_tag(
+    release_path: ReleasePath,
+    results: Dict[str, RepoState],
+    version: str,
+    release_type: str,
+    stability: str,
+) -> Optional[str]:
+    """Return the next suggested app monorepo tag without printing."""
+    repo = repo_by_name(release_path.taggable_repo)
+    state = results.get(repo.name)
+    if state is None:
+        return None
+
+    branch = release_branch_for_repo(state, repo, version)
+    try:
+        return get_next_tag_command(
+            repo,
+            version,
+            stability,
+            state,
+            branch,
+            release_type,
+            release_path,
+        )
+    except Exception as err:
+        console.print(f"[yellow]No next tag for {repo.name}: {err}[/]")
+        return None
+
+
 def print_app_tag_section(
     release_path: ReleasePath,
     results: Dict[str, RepoState],
@@ -825,21 +854,49 @@ def print_app_tag_section(
     if latest_tag:
         show_changes_since_tag(repo, branch, latest_tag)
 
-    try:
-        next_tag = get_next_tag_command(
-            repo,
-            version,
-            stability,
-            state,
-            branch,
-            release_type,
-            release_path,
-        )
-    except Exception as err:
-        console.print(f"[yellow]No next tag for {repo.name}: {err}[/]")
+    next_tag = compute_app_tag(release_path, results, version, release_type, stability)
+    if next_tag is None:
         return
-
     print_suggested_tag_block("app tag", next_tag)
+
+
+def stack_repo_push_order(release_path: ReleasePath) -> List[str]:
+    """Return dependent stack repos in the order their tags should be pushed."""
+    return list(release_path.stack_tag_repos)
+
+
+def print_tag_push_order_note(release_path: ReleasePath) -> None:
+    """Remind the operator to push dependent repo tags before the app monorepo tag."""
+    ordered = stack_repo_push_order(release_path)
+    lines = [
+        "Push annotated tags in this order. Dependent stack repos first, app monorepo last.",
+        "",
+    ]
+    step = 1
+    for repo_name in ordered:
+        label = STACK_REPO_LABELS.get(repo_name, repo_name)
+        lines.append(f"{step}. [bold]{repo_name}[/] ({label}), if a new tag is needed")
+        step += 1
+    lines.append(f"{step}. [bold]{release_path.taggable_repo}[/] (app), always last")
+    console.print()
+    console.print(Panel("\n".join(lines), title="Tag push order", border_style="yellow", padding=(1, 2)))
+
+
+def print_track_builds_command(release_path: ReleasePath, app_tag: str) -> None:
+    """Print the command to locate CI jobs after the app tag has been pushed."""
+    from automation.track_builds import RobotPath, track_builds_invocation
+
+    command = track_builds_invocation(cast(RobotPath, release_path.name), app_tag, wait=True)
+    console.print()
+    console.print(
+        Panel(
+            "After pushing the app tag above, track app, kickoff, and robot OS CI with:\n\n"
+            f"[bold cyan]{command}[/]",
+            title="Track release builds",
+            border_style="blue",
+            padding=(1, 2),
+        )
+    )
 
 
 def print_stack_repo_tag_section(
@@ -941,13 +998,19 @@ def main() -> None:
     else:
         print_internal_table(results, active_repos, version)
 
-    console.rule(f"{release_path.taggable_repo} (app) tag")
-    print_app_tag_section(release_path, results, version, release_type, stability)
+    print_tag_push_order_note(release_path)
 
     for repo_name in release_path.stack_tag_repos:
         label = STACK_REPO_LABELS.get(repo_name, repo_name)
         console.rule(f"{repo_name} ({label}) tag")
         print_stack_repo_tag_section(repo_name, release_path, results, version, release_type, stability)
+
+    console.rule(f"{release_path.taggable_repo} (app) tag")
+    print_app_tag_section(release_path, results, version, release_type, stability)
+
+    app_tag = compute_app_tag(release_path, results, version, release_type, stability)
+    if app_tag is not None:
+        print_track_builds_command(release_path, app_tag)
 
 
 if __name__ == "__main__":
