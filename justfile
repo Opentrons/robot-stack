@@ -22,21 +22,17 @@
 @ot2-assets:
     uv run ./automation/ot2_assets.py
 
-# generate OT-2 assets report and serve it on http://127.0.0.1:8765/
-@ot2-assets-serve:
-    uv run ./automation/ot2_assets.py --serve --open-browser
-
 # fetch Flex app and robot assets, write HTML report to .build/flex-assets.html
 @flex-assets:
     uv run ./automation/flex_assets.py
 
-# generate Flex assets report and serve it on http://127.0.0.1:8766/
-@flex-assets-serve:
-    uv run ./automation/flex_assets.py --serve --open-browser
-
-# generate Flex + OT-2 reports and index for GitHub Pages (pages/)
+# generate asset inventories, release guides, and index under pages/
 @assets-pages:
     uv run ./automation/publish_assets_pages.py
+
+# generate all pages/ HTML and serve at http://127.0.0.1:8765/
+@assets-serve:
+    uv run ./automation/publish_assets_pages.py --serve --open-browser
 
 @ty:
     uv sync

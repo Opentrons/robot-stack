@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Generate Flex and OT-2 HTML reports
+      - name: Generate GitHub Pages site
         run: uv run ./automation/publish_assets_pages.py --output-dir pages --limit 15
 
       - name: Upload GitHub Pages artifact

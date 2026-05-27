@@ -9,16 +9,32 @@ import html
 from datetime import datetime, timezone
 from pathlib import Path
 
-from automation.asset_inventory import ReleasePlatformConfig, collect_snapshots, render_html, write_report
+from automation.asset_inventory import (
+    ReleasePlatformConfig,
+    collect_snapshots,
+    render_html,
+    serve_report,
+    write_report,
+)
 from automation.flex_assets import FLEX_CONFIG
 from automation.ot2_assets import OT2_CONFIG
+from automation.release_guides import GUIDE_NAV, publish_release_guides
 
 DEFAULT_OUTPUT_DIR = Path("pages")
 DEFAULT_LIMIT = 15
+DEFAULT_PORT = 8765
 
 
 def render_index(generated_at: str, limit: int) -> str:
-    """Render a landing page linking to both platform reports."""
+    """Render a landing page linking to both platform reports and release guides."""
+    guide_items = "".join(
+        f"""
+      <li>
+        <a href="{html.escape(item.filename)}">{html.escape(item.title)} release guide</a>
+        <div class="meta">Tag logic and manifest URLs for <code>just go</code></div>
+      </li>"""
+        for item in GUIDE_NAV
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,6 +87,16 @@ def render_index(generated_at: str, limit: int) -> str:
       border-radius: 12px;
       padding: 1rem 1.25rem;
     }}
+    li.section-title {{
+      background: transparent;
+      border: none;
+      padding: 0.5rem 0 0;
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }}
     a {{
       color: var(--accent);
       font-size: 1.1rem;
@@ -88,6 +114,7 @@ def render_index(generated_at: str, limit: int) -> str:
     Each report shows the {limit} most recent versions per manifest.
     Updated {html.escape(generated_at)}.</p>
     <ul>
+      <li class="section-title">Live asset inventories</li>
       <li>
         <a href="flex-assets.html">Flex release assets</a>
         <div class="meta">App (<code>opentrons</code>) and robot OS (<code>oe-core</code>)</div>
@@ -96,6 +123,7 @@ def render_index(generated_at: str, limit: int) -> str:
         <a href="ot2-assets.html">OT-2 release assets</a>
         <div class="meta">App (<code>opentrons-ot2</code>) and robot OS (<code>buildroot</code>)</div>
       </li>
+      <li class="section-title">Release guides</li>{guide_items}
     </ul>
   </main>
 </body>
@@ -111,7 +139,7 @@ async def generate_platform_report(config: ReleasePlatformConfig, output: Path, 
 
 
 async def publish_pages(output_dir: Path, limit: int) -> None:
-    """Generate index, Flex, and OT-2 reports under output_dir."""
+    """Generate index, asset inventories, and release guides under output_dir."""
     output_dir.mkdir(parents=True, exist_ok=True)
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -119,6 +147,7 @@ async def publish_pages(output_dir: Path, limit: int) -> None:
         generate_platform_report(FLEX_CONFIG, output_dir / "flex-assets.html", limit),
         generate_platform_report(OT2_CONFIG, output_dir / "ot2-assets.html", limit),
     )
+    publish_release_guides(output_dir)
     index_path = output_dir / "index.html"
     write_report(index_path, render_index(generated_at, limit))
     print(f"Wrote {index_path.resolve()}")
@@ -139,6 +168,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_LIMIT,
         help=f"Recent versions per manifest (default: {DEFAULT_LIMIT})",
     )
+    parser.add_argument("--serve", action="store_true", help="Serve pages/ on localhost after generating.")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_PORT,
+        help=f"Port for --serve (default: {DEFAULT_PORT})",
+    )
+    parser.add_argument(
+        "--open-browser",
+        action="store_true",
+        help="Open the site index in a browser when serving.",
+    )
     return parser
 
 
@@ -146,6 +187,8 @@ def main() -> None:
     """CLI entrypoint."""
     args = build_parser().parse_args()
     asyncio.run(publish_pages(args.output_dir, args.limit))
+    if args.serve:
+        serve_report(args.output_dir / "index.html", args.port, args.open_browser)
 
 
 if __name__ == "__main__":
