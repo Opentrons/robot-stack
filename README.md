@@ -16,8 +16,11 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
   - `uv run just fix`
 - sync repos and inspect release state
   - `uv run just go`
+  - non-interactive example: `uv run just go --non-interactive --skip-assumptions --path flex --release-type internal --stability unstable`
 - find GitHub Actions runs after pushing an app tag
   - `uv run just track-builds --path ot2 --tag internal@26.5.2801 --wait`
+- print a CloudFront invalidation command after builds finish
+  - `uv run just invalidate-cloudfront --path ot2 --tag internal@26.5.2801`
 
 ## Release Paths
 
@@ -62,6 +65,8 @@ just track-builds --path ot2 --tag internal@26.5.2801 --wait
 ```
 
 The script finds app, kickoff, and robot OS workflow runs and prints a Rich table plus a Slack copy block with two links (`app` and `ot2` or `flex`). With `--wait`, it polls every 15 seconds until all three workflow runs appear (default timeout 15 minutes).
+
+After builds finish, print a CloudFront invalidation command with `just invalidate-cloudfront --path ot2 --tag internal@26.5.2801`.
 
 ## OT-2 calendar semver
 

@@ -2,7 +2,7 @@
 
 After pushing a monorepo tag, this script locates the app CI run, the cross-repo
 kickoff workflow, and the robot OS build in buildroot (OT-2) or oe-core (Flex).
-It prints Rich output with clickable links plus a Slack-ready copy block.
+It prints Rich output with clickable links and a Slack-ready copy block.
 """
 
 from __future__ import annotations
@@ -544,8 +544,12 @@ def stage_url(stage: BuildStage) -> Optional[str]:
     return None
 
 
-def render_report(path: PathConfig, tag: str, stages: Sequence[BuildStage]) -> None:
-    """Print Rich tables and a Slack-ready copy block."""
+def render_report(
+    path: PathConfig,
+    tag: str,
+    stages: Sequence[BuildStage],
+) -> None:
+    """Print Rich tables and Slack copy block for release build runs."""
     summary = Table(show_header=False, box=None, padding=(0, 1))
     summary.add_row("Robot path", f"[bold]{path.label}[/]")
     summary.add_row("Tag", f"[bold cyan]{tag}[/]")
@@ -696,6 +700,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=15,
         help="Seconds between polls with --wait (default: 15).",
     )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Do not prompt; require --tag (and --release-type when the tag has no prefix).",
+    )
     return parser
 
 
@@ -704,6 +713,9 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[RobotPath, str]:
     tag: Optional[str] = args.tag
 
     if tag is None:
+        if args.non_interactive:
+            console.print("[red]--tag is required with --non-interactive[/]")
+            sys.exit(1)
         tag = Prompt.ask("Release tag")
 
     assert tag is not None
@@ -718,6 +730,9 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[RobotPath, str]:
 
     if not tag.startswith(("internal@", "ot3@", "v")):
         if args.release_type is None:
+            if args.non_interactive:
+                console.print("[red]--release-type is required with --non-interactive when --tag has no prefix[/]")
+                sys.exit(1)
             release_type = Prompt.ask("Release type", choices=["internal", "external"])
         else:
             release_type = args.release_type

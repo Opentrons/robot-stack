@@ -7,12 +7,16 @@
     just --fmt --unstable
 
 # update opentrons repositories
-@go:
-    uv run ./automation/go.py
+@go *args:
+    uv run ./automation/go.py {{args}}
 
 # find GitHub Actions build jobs for a pushed OT-2 or Flex release tag
 @track-builds *args:
     uv run ./automation/track_builds.py {{args}}
+
+# print CloudFront invalidation command for a release tag
+@invalidate-cloudfront *args:
+    uv run ./automation/invalidate_cloudfront.py {{args}}
 
 # format and lint with ruff
 @fix:

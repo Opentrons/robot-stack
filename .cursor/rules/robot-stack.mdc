@@ -120,6 +120,141 @@ OT-2 release `internal@26.5.2801`
 
 Tag prefix inference when `--path` is omitted: `internal@` → OT-2, `ot3@` → Flex, otherwise Flex.
 
+### CloudFront invalidation (`just invalidate-cloudfront`)
+
+After builds finish, run `just invalidate-cloudfront --path flex|ot2 --tag <app-tag>` to print a copy-paste `aws cloudfront create-invalidation` command (it does not run invalidation). Uses `--profile robotics_robot_stack_prod-admin`. Hosts come from `robot-stack-infra` prod domains:
+
+| Path | Channel | Host | Infra stack |
+|---|---|---|---|
+| Flex | external | `builds.opentrons.com` | `release-ci` |
+| Flex | internal | `ot3-development.builds.opentrons.com` | `ot3-ci` |
+| OT-2 | external | `ot2.builds.opentrons.com` | `ot2-ci` |
+| OT-2 | internal | `ot2-development.builds.opentrons.com` | `ot2-internal-ci` |
+
+Invalidation paths are `/app/*` plus `/ot3-oe/*` (Flex) or `/ot2-br/*` (OT-2). When AWS credentials are available, the distribution ID is resolved automatically; otherwise a lookup command and placeholder are shown.
+
+## Tooling safety model
+
+These scripts are **advisory**. They gather state, print tables, copy blocks, and suggested shell commands. A human (or agent) runs the printed commands manually.
+
+| Action | Who performs it |
+|---|---|
+| `git clone`, `git fetch`, `git pull`, `git tag -l`, `git log` (local repo sync/read) | `just go` only |
+| `git tag -a`, `git push`, workflow dispatch, CloudFront invalidation, S3 uploads | **Not automated**; printed as copy-paste commands |
+| Read GitHub Actions / AWS CloudFront distribution IDs | `track-builds`, `invalidate-cloudfront` (lookup only) |
+| Fetch public S3/CloudFront manifests over HTTPS | asset inventory scripts |
+| Write local HTML under `.build/` or `pages/` | `ot2-assets`, `flex-assets`, `assets-pages` |
+
+Nothing in this repo creates release tags, pushes tags, triggers CI, invalidates CloudFront, or publishes artifacts unless an operator runs the printed commands elsewhere.
+
+## Agentic CLI reference
+
+All release tools accept CLI flags so agents can run them without prompts. Use `--non-interactive` where documented to fail fast instead of blocking on stdin.
+
+Run everything via `uv run just <recipe> ...` or `uv run ./automation/<script>.py ...`.
+
+### Typical release sequence
+
+1. **Plan tags:** `just go --non-interactive --skip-assumptions --path flex|ot2 --release-type internal|external --stability ... [--version ...]`
+2. **Human:** run printed `git tag -a` / `git push` commands in each repo (stack repos first, app last)
+3. **Track CI:** `just track-builds --non-interactive --path flex|ot2 --tag <app-tag> --wait`
+4. **Human:** wait for builds; validate manifests if needed (`just ot2-assets` / `just flex-assets`)
+5. **Print invalidation:** `just invalidate-cloudfront --non-interactive --path flex|ot2 --tag <app-tag>`
+6. **Human:** run the printed `aws cloudfront create-invalidation` command
+
+### `just go` (`automation/go.py`)
+
+Syncs stack repos locally and prints release analysis plus suggested tag commands.
+
+**Side effects:** clone/fetch/pull in workspace repo directories (`opentrons/`, `oe-core/`, etc.).
+
+| Flag | Purpose |
+|---|---|
+| `--path flex\|ot2` | Robot path (default: `flex`, or prompt) |
+| `--release-type internal\|external` | Channel (default: `external`, or prompt) |
+| `--stability` | OT-2: `stable`, `alpha`, `beta`. Flex: `stable`, `unstable` (alpha) |
+| `--version` | Base version. Flex: `vX.Y.Z`. OT-2 internal: `YY.M.DNN`. OT-2 external: `YY.M.N` |
+| `--skip-assumptions` | Omit the assumptions panel (cleaner agent output) |
+| `--non-interactive` | Never prompt; use defaults for omitted flags |
+
+**Defaults with `--non-interactive`:** path `flex`, release `external`, stability `stable` (OT-2) or `unstable` (Flex), version computed from calendar/semver rules (Flex default `v8.5.0`).
+
+**Examples:**
+
+```bash
+just go --non-interactive --skip-assumptions --path ot2 --release-type internal --stability alpha
+just go --non-interactive --skip-assumptions --path flex --release-type internal --stability unstable --version v8.5.0
+```
+
+**Output includes:** latest-tag summary, change-since-tag tables, tag push order, per-repo tag plans (`git tag -a` / `git push` suggestions), app tag section, and a **Next steps** panel with `track-builds` and `invalidate-cloudfront` commands.
+
+### `just track-builds` (`automation/track_builds.py`)
+
+Locates GitHub Actions runs for app, kickoff, and robot OS workflows. Prints Rich tables, key jobs, and a Slack copy block (`app` + `ot2`/`flex` links only).
+
+**Side effects:** read-only (`gh` API). No git or AWS writes.
+
+| Flag | Purpose |
+|---|---|
+| `--path flex\|ot2` | Robot path (default: infer from tag prefix, else `flex`) |
+| `--tag` | App release tag (required with `--non-interactive`) |
+| `--release-type internal\|external` | Prefix bare tags like `26.5.2601` or `8.5.0` |
+| `--wait` | Poll until app, kickoff, and robot OS runs appear |
+| `--wait-timeout` | Max wait seconds (default `900`) |
+| `--poll-seconds` | Poll interval (default `15`) |
+| `--run-limit` | Monorepo runs to scan (default `40`) |
+| `--robot-max-pages` | Robot OS repo run pages (default `5`) |
+| `--non-interactive` | Require `--tag`; no prompts |
+
+**Exit codes:** `1` on runtime error; `2` if top-level workflow runs still missing after lookup/wait.
+
+```bash
+just track-builds --non-interactive --path ot2 --tag internal@26.5.2601 --wait
+```
+
+### `just invalidate-cloudfront` (`automation/invalidate_cloudfront.py`)
+
+Prints CloudFront host mapping, distribution ID (when AWS creds allow lookup), paths, and a copy-paste `aws cloudfront create-invalidation` command. **Does not run invalidation.**
+
+| Flag | Purpose |
+|---|---|
+| `--path flex\|ot2` | Robot path (default: infer from tag) |
+| `--tag` | App release tag (required with `--non-interactive`) |
+| `--release-type internal\|external` | Prefix bare tags |
+| `--aws-profile` | AWS profile for lookup (default: `robotics_robot_stack_prod-admin`) |
+| `--skip-cloudfront-lookup` | Skip AWS lookup; print placeholder distribution ID |
+| `--non-interactive` | Require `--tag`; no prompts |
+
+```bash
+just invalidate-cloudfront --non-interactive --path flex --tag ot3@8.5.0-alpha.1
+just invalidate-cloudfront --non-interactive --path ot2 --tag internal@26.5.2601 --skip-cloudfront-lookup
+```
+
+### Asset inventory (`just ot2-assets`, `just flex-assets`, `just assets-pages`)
+
+Fetch live S3/CloudFront manifests and write HTML reports. Read-only against public URLs except local file writes.
+
+| Recipe | Script | Default output |
+|---|---|---|
+| `just ot2-assets` | `automation/ot2_assets.py` | `.build/ot2-assets.html` |
+| `just flex-assets` | `automation/flex_assets.py` | `.build/flex-assets.html` |
+| `just assets-pages` | `automation/publish_assets_pages.py` | `pages/` (index + both inventories + release guides) |
+| `just assets-serve` | same with `--serve --open-browser` | serves `pages/` on port `8765` |
+
+Shared flags (per-platform scripts): `--limit`, `--output`, `--serve`, `--port`, `--open-browser`.
+
+`assets-pages` flags: `--output-dir`, `--limit`, `--serve`, `--port`, `--open-browser`.
+
+### Dev utilities
+
+| Recipe | Purpose |
+|---|---|
+| `just fix` | `ruff format` + `ruff check --fix` |
+| `just ty` | `uv sync` + `ty check` |
+| `just fmt` | format justfile |
+
+`automation/build.py` is a legacy checklist stub; prefer `just go` for release planning.
+
 ## Development Standards
 
 ### Language & Version
@@ -154,4 +289,4 @@ Tag prefix inference when `--path` is omitted: `internal@` → OT-2, `ot3@` → 
 
 - Use `Path` from `pathlib`, not raw strings or `os.path`
 - Default to immutability where possible (e.g., tuples, frozen dataclasses)
-- CLI tools should include a `--dry-run` mode for safety
+- Release tooling is print-only by design; only `just go` mutates local git checkouts (clone/fetch/pull). Do not add hidden side effects to advisory scripts.

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
 import re
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -71,6 +73,8 @@ OT2_RELEASE_TZ = ZoneInfo("America/New_York")
 OT2_MONTH_CAP = r"([1-9]|1[0-2])"
 OT2_INTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.(\d+)(?:-(alpha|beta))?$")
 OT2_EXTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.([0-9])(?:-(alpha|beta)\.(\d+))?$")
+OT2_STABILITIES = ("stable", "alpha", "beta")
+FLEX_STABILITIES = ("stable", "unstable")
 Ot2Stability = Literal["stable", "alpha", "beta"]
 
 
@@ -169,7 +173,7 @@ def ot2_external_version_for_month(release_date: date | None = None, release_num
     return encode_ot2_external_version(release_date.year, release_date.month, release_num)
 
 
-def ot2_prerelease_for_stability(stability: Ot2Stability) -> Optional[str]:
+def ot2_prerelease_for_stability(stability: str) -> Optional[str]:
     """Map OT-2 internal stability choice to a bare semver prerelease suffix, if any."""
     if stability == "stable":
         return None
@@ -328,9 +332,9 @@ def get_next_ot2_tag_command(
     return next_tag
 
 
-def format_tag_commands(next_tag: str) -> Tuple[str, str, str]:
+def format_tag_commands(next_tag: str, release_version: str) -> Tuple[str, str, str]:
     """Return create, verify, and push commands for an annotated release tag."""
-    create = f"git tag -a {next_tag} -m 'chore(release): {next_tag}'"
+    create = f"git tag -a {next_tag} -m 'chore(release): {release_version}'"
     verify = f"git log {next_tag} --oneline -n 10"
     push = f"git push origin {next_tag}"
     return create, verify, push
@@ -564,11 +568,7 @@ def get_next_stack_repo_tag(
         internal_alpha: Optional[int] = None
         if release_type == "internal" and release_path.name == "flex":
             internal_base = flex_release_semver_base(version)
-            internal_alpha = (
-                flex_internal_alpha_from_opentrons(results, version, stability)
-                if results is not None
-                else None
-            )
+            internal_alpha = flex_internal_alpha_from_opentrons(results, version, stability) if results is not None else None
         return get_next_oe_core_tag_command(
             state,
             branch,
@@ -605,9 +605,7 @@ def get_stack_repo_tag_plan(
             reason=f"{branch} matches {latest_tag}",
         )
 
-    next_tag = get_next_stack_repo_tag(
-        repo, state, branch, version, release_type, stability, release_path, results
-    )
+    next_tag = get_next_stack_repo_tag(repo, state, branch, version, release_type, stability, release_path, results)
     reason = f"commits on {branch} since {latest_tag or 'no prior channel tag'}"
     return TagPlan(
         needs_tag=True,
@@ -618,9 +616,27 @@ def get_stack_repo_tag_plan(
     )
 
 
-def print_suggested_tag_block(label: str, next_tag: str) -> None:
+def release_version_label(
+    release_path: ReleasePath,
+    release_type: str,
+    version: str,
+    app_tag: Optional[str],
+) -> str:
+    """Return the monorepo release version referenced in stack repo tag messages."""
+    if app_tag is not None:
+        return app_tag
+
+    repo = repo_by_name(release_path.taggable_repo)
+    prefix = repo.external_tag_pattern if release_type == "external" else repo.internal_tag_pattern
+    clean = version.lstrip("v")
+    if prefix in {"internal@", "ot3@"}:
+        return f"{prefix}{clean}"
+    return version if version.startswith("v") else f"v{version}"
+
+
+def print_suggested_tag_block(label: str, next_tag: str, release_version: str) -> None:
     """Print a header panel and git commands for creating and pushing a tag."""
-    create, verify, push = format_tag_commands(next_tag)
+    create, verify, push = format_tag_commands(next_tag, release_version)
     console.print()
     console.print(
         Panel(
@@ -635,7 +651,7 @@ def print_suggested_tag_block(label: str, next_tag: str) -> None:
     )
 
 
-def print_tag_plan(repo: RepoSpec, plan: TagPlan) -> None:
+def print_tag_plan(repo: RepoSpec, plan: TagPlan, release_version: str) -> None:
     """Print whether a repo needs a tag and the commands to create and push it."""
     if not plan.needs_tag:
         console.print(f"[green]No new tag needed[/] on [bold]{plan.branch}[/] ({plan.reason})")
@@ -649,7 +665,7 @@ def print_tag_plan(repo: RepoSpec, plan: TagPlan) -> None:
         console.print("[red]Could not determine next tag[/]")
         return
 
-    print_suggested_tag_block(f"{repo.name} tag", plan.next_tag)
+    print_suggested_tag_block(f"{repo.name} tag", plan.next_tag, release_version)
 
 
 def get_next_tag_command(
@@ -876,33 +892,177 @@ def repos_to_sync(path: ReleasePath) -> List[RepoSpec]:
 
 def prompt_release_version(release_path: ReleasePath, release_type: str = "external") -> str:
     """Prompt for the base release version appropriate to the selected robot path."""
+    default_version = default_release_version(release_path, release_type)
     if release_path.name == "ot2":
         if release_type == "external":
-            default_version = ot2_external_version_for_month()
             prompt_label = "Base version (OT-2 external YY.M.N)"
             while True:
                 version = Prompt.ask(prompt_label, default=default_version)
                 try:
-                    decode_ot2_external_version(version.lstrip("v"))
+                    return normalize_release_version(release_path, release_type, version)
                 except ValueError as err:
                     console.print(f"[red]Invalid OT-2 external version: {err}[/]")
                     continue
-                return version.lstrip("v")
 
-        default_version = ot2_internal_version_for_date()
         while True:
             version = Prompt.ask("Base version (OT-2 internal YY.M.DNN)", default=default_version)
             try:
-                decode_ot2_internal_version(version.lstrip("v"))
+                return normalize_release_version(release_path, release_type, version)
             except ValueError as err:
                 console.print(f"[red]Invalid OT-2 internal version: {err}[/]")
                 continue
-            return version.lstrip("v")
 
-    version = Prompt.ask("Base version", default="v8.5.0")
-    if not version.startswith("v"):
-        version = f"v{version}"
-    return version
+    version = Prompt.ask("Base version", default=default_version)
+    return normalize_release_version(release_path, release_type, version)
+
+
+def default_robot_path() -> str:
+    """Return the default robot path when no CLI flag is given."""
+    return "flex"
+
+
+def default_release_type() -> str:
+    """Return the default release channel when no CLI flag is given."""
+    return "external"
+
+
+def default_stability(release_path: ReleasePath) -> str:
+    """Return the default stability choice for a robot path."""
+    return "stable" if release_path.name == "ot2" else "unstable"
+
+
+def default_release_version(release_path: ReleasePath, release_type: str) -> str:
+    """Return the default base version for a robot path and channel."""
+    if release_path.name == "ot2":
+        if release_type == "external":
+            return ot2_external_version_for_month()
+        return ot2_internal_version_for_date()
+    return "v8.5.0"
+
+
+def normalize_release_version(release_path: ReleasePath, release_type: str, version: str) -> str:
+    """Normalize and validate a base release version string."""
+    if release_path.name == "ot2":
+        clean = version.lstrip("v")
+        if release_type == "external":
+            decode_ot2_external_version(clean)
+        else:
+            decode_ot2_internal_version(clean)
+        return clean
+
+    normalized = version if version.startswith("v") else f"v{version.lstrip('v')}"
+    return normalized
+
+
+def validate_stability(release_path: ReleasePath, stability: str) -> None:
+    """Raise ValueError when stability is invalid for the selected robot path."""
+    allowed = OT2_STABILITIES if release_path.name == "ot2" else FLEX_STABILITIES
+    if stability not in allowed:
+        raise ValueError(f"Stability must be one of {', '.join(allowed)} for {release_path.label}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Configure CLI arguments for non-interactive and agentic use."""
+    parser = argparse.ArgumentParser(
+        description="Sync stack repos and print release tagging guidance.",
+    )
+    parser.add_argument(
+        "--path",
+        choices=list(RELEASE_PATHS),
+        help="Robot release path (default: flex, or prompt).",
+    )
+    parser.add_argument(
+        "--release-type",
+        choices=["internal", "external"],
+        help="Release channel (default: external, or prompt).",
+    )
+    parser.add_argument(
+        "--stability",
+        help="OT-2: stable, alpha, or beta. Flex: stable or unstable (alpha builds).",
+    )
+    parser.add_argument(
+        "--version",
+        help="Base release version (Flex: vX.Y.Z; OT-2 internal: YY.M.DNN; OT-2 external: YY.M.N).",
+    )
+    parser.add_argument(
+        "--skip-assumptions",
+        action="store_true",
+        help="Do not print the assumptions panel.",
+    )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Do not prompt; use defaults for omitted options.",
+    )
+    return parser
+
+
+def resolve_robot_path_name(args: argparse.Namespace) -> str:
+    """Resolve robot path from CLI args, defaults, or prompt."""
+    if args.path is not None:
+        return args.path
+    if args.non_interactive:
+        return default_robot_path()
+    return Prompt.ask("Robot path", choices=list(RELEASE_PATHS), default=default_robot_path())
+
+
+def resolve_release_type(args: argparse.Namespace) -> str:
+    """Resolve release channel from CLI args, defaults, or prompt."""
+    if args.release_type is not None:
+        return args.release_type
+    if args.non_interactive:
+        return default_release_type()
+    return Prompt.ask("Release type", choices=["internal", "external"], default=default_release_type())
+
+
+def resolve_stability(release_path: ReleasePath, args: argparse.Namespace) -> str:
+    """Resolve stability from CLI args, defaults, or prompt."""
+    if args.stability is not None:
+        try:
+            validate_stability(release_path, args.stability)
+        except ValueError as err:
+            console.print(f"[red]{err}[/]")
+            sys.exit(1)
+        return args.stability
+
+    if args.non_interactive:
+        return default_stability(release_path)
+
+    choices = list(OT2_STABILITIES if release_path.name == "ot2" else FLEX_STABILITIES)
+    return Prompt.ask("Stability", choices=choices, default=default_stability(release_path))
+
+
+def resolve_release_version(release_path: ReleasePath, release_type: str, args: argparse.Namespace) -> str:
+    """Resolve base version from CLI args, defaults, or prompt."""
+    if args.version is not None:
+        try:
+            return normalize_release_version(release_path, release_type, args.version)
+        except ValueError as err:
+            console.print(f"[red]Invalid version: {err}[/]")
+            sys.exit(1)
+    if args.non_interactive:
+        return default_release_version(release_path, release_type)
+    return prompt_release_version(release_path, release_type)
+
+
+ASSUMPTIONS_MARKDOWN = Markdown(
+    """
+##Tool Assumptions
+
+- All tags we care about are *annotated*
+  - example app tag: `git tag -a v8.4.0-alpha.8 -m 'chore(release): v8.4.0-alpha.8'`
+  - stack repo tags use their own name but reference the monorepo release in the message:
+    `git tag -a v0.10.1 -m 'chore(release): v8.4.0-alpha.8'`
+    - This gives the tag a message, creator, and date
+    - Then we use `git tag -l --sort=-creatordate` to get the latest tag
+- Across every robot-stack repo, isolation branches for a release cycle look like: `chore_release-<version>`
+"""
+)
+
+
+def print_assumptions_panel() -> None:
+    """Print the release tooling assumptions panel."""
+    console.print(Panel(ASSUMPTIONS_MARKDOWN, title="🔧 Assumptions", border_style="cyan"))
 
 
 def repo_by_name(name: str) -> RepoSpec:
@@ -948,6 +1108,7 @@ def print_app_tag_section(
     version: str,
     release_type: str,
     stability: str,
+    release_version: str,
 ) -> None:
     """Print change summary and tag commands for the app repo."""
     repo = repo_by_name(release_path.taggable_repo)
@@ -965,7 +1126,7 @@ def print_app_tag_section(
     next_tag = compute_app_tag(release_path, results, version, release_type, stability)
     if next_tag is None:
         return
-    print_suggested_tag_block("app tag", next_tag)
+    print_suggested_tag_block("app tag", next_tag, release_version)
 
 
 def stack_repo_push_order(release_path: ReleasePath) -> List[str]:
@@ -990,23 +1151,6 @@ def print_tag_push_order_note(release_path: ReleasePath) -> None:
     console.print(Panel("\n".join(lines), title="Tag push order", border_style="yellow", padding=(1, 2)))
 
 
-def print_track_builds_command(release_path: ReleasePath, app_tag: str) -> None:
-    """Print the command to locate CI jobs after the app tag has been pushed."""
-    from automation.track_builds import RobotPath, track_builds_invocation
-
-    command = track_builds_invocation(cast(RobotPath, release_path.name), app_tag, wait=True)
-    console.print()
-    console.print(
-        Panel(
-            "After pushing the app tag above, track app, kickoff, and robot OS CI with:\n\n"
-            f"[bold cyan]{command}[/]",
-            title="Track release builds",
-            border_style="blue",
-            padding=(1, 2),
-        )
-    )
-
-
 def print_stack_repo_tag_section(
     repo_name: str,
     release_path: ReleasePath,
@@ -1014,6 +1158,7 @@ def print_stack_repo_tag_section(
     version: str,
     release_type: str,
     stability: str,
+    release_version: str,
 ) -> None:
     """Print whether a stack repo needs a tag and the commands to push it."""
     repo = repo_by_name(repo_name)
@@ -1023,45 +1168,44 @@ def print_stack_repo_tag_section(
         return
 
     plan = get_stack_repo_tag_plan(repo, state, version, release_type, stability, release_path, results)
-    print_tag_plan(repo, plan)
+    print_tag_plan(repo, plan, release_version)
 
 
-def main() -> None:
-    """Prompt for release info, sync repos, and print summary + appropriate tables."""
-    assumptions_md = Markdown(
-        """
-##Tool Assumptions
+def print_track_builds_command(release_path: ReleasePath, app_tag: str) -> None:
+    """Print follow-up commands after the app tag has been pushed."""
+    from automation.track_builds import RobotPath, track_builds_invocation
 
-- All tags we care about are *annotated*
-  - example `git tag -a v8.4.0-alpha.8 -m 'chore(release): v8.4.0-alpha.8'`
-    - This gives the tag a message, creator, and date
-    - Then we use `git tag -l --sort=-creatordate` to get the latest tag
-- Across every robot-stack repo, isolation branches for a release cycle look like: `chore_release-<version>`
-"""
+    path = cast(RobotPath, release_path.name)
+    track_command = track_builds_invocation(path, app_tag, wait=True)
+    invalidate_command = f"just invalidate-cloudfront --path {path} --tag {app_tag}"
+    console.print()
+    console.print(
+        Panel(
+            "After pushing the app tag above:\n\n"
+            f"1. Track app, kickoff, and robot OS CI:\n[bold cyan]{track_command}[/]\n\n"
+            f"2. After builds finish, print CloudFront invalidation command:\n[bold cyan]{invalidate_command}[/]",
+            title="Next steps",
+            border_style="blue",
+            padding=(1, 2),
+        )
     )
 
-    console.print(Panel(assumptions_md, title="🔧 Assumptions", border_style="cyan"))
-    robot_path_name = Prompt.ask("Robot path", choices=list(RELEASE_PATHS), default="flex")
-    release_path = RELEASE_PATHS[robot_path_name]
+
+def run_release(
+    release_path: ReleasePath,
+    release_type: str,
+    stability: str,
+    version: str,
+) -> None:
+    """Sync repos and print release tables, tag guidance, and follow-up commands."""
     active_repos = repos_for_path(release_path)
     sync_repos = repos_to_sync(release_path)
-    release_type = Prompt.ask("Release type", choices=["internal", "external"], default="external")
-    if release_path.name == "ot2":
-        stability = Prompt.ask("Stability", choices=["stable", "alpha", "beta"], default="stable")
-        version = prompt_release_version(release_path, release_type)
-        console.print(
-            f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
-            f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"
-        )
-    else:
-        stability = Prompt.ask("Stability", choices=["stable", "unstable"], default="unstable")
-        version = prompt_release_version(release_path, release_type)
-        console.print(
-            f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
-            f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"
-        )
 
-    # Parallel sync & collect
+    console.print(
+        f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
+        f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"
+    )
+
     results: Dict[str, RepoState] = {}
     with ThreadPoolExecutor() as executor:
         futures = {executor.submit(process_repo, r, version): r for r in sync_repos}
@@ -1073,7 +1217,6 @@ def main() -> None:
             except Exception as err:
                 console.log(f"[red]❌ {repo.name} failed: {err}[/]")
 
-    # 1) Latest-tags summary for selected channel on chore_release if present
     summary = Table(title=f"Latest Tags Summary ({release_path.label})", show_lines=True)
     summary.add_column("Repo", style="bold")
     summary.add_column("Pattern")
@@ -1100,7 +1243,6 @@ def main() -> None:
 
     console.print(summary)
 
-    # 2) Table + tag guidance for chosen channel
     if release_type == "external":
         print_external_table(results, active_repos, version)
     else:
@@ -1108,17 +1250,44 @@ def main() -> None:
 
     print_tag_push_order_note(release_path)
 
+    app_tag = compute_app_tag(release_path, results, version, release_type, stability)
+    release_version = release_version_label(release_path, release_type, version, app_tag)
+
     for repo_name in release_path.stack_tag_repos:
         label = STACK_REPO_LABELS.get(repo_name, repo_name)
         console.rule(f"{repo_name} ({label}) tag")
-        print_stack_repo_tag_section(repo_name, release_path, results, version, release_type, stability)
+        print_stack_repo_tag_section(
+            repo_name,
+            release_path,
+            results,
+            version,
+            release_type,
+            stability,
+            release_version,
+        )
 
     console.rule(f"{release_path.taggable_repo} (app) tag")
-    print_app_tag_section(release_path, results, version, release_type, stability)
+    print_app_tag_section(release_path, results, version, release_type, stability, release_version)
 
-    app_tag = compute_app_tag(release_path, results, version, release_type, stability)
     if app_tag is not None:
         print_track_builds_command(release_path, app_tag)
+
+
+def main() -> None:
+    """Sync stack repos and print release tagging guidance."""
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if not args.skip_assumptions:
+        print_assumptions_panel()
+
+    robot_path_name = resolve_robot_path_name(args)
+    release_path = RELEASE_PATHS[robot_path_name]
+    release_type = resolve_release_type(args)
+    stability = resolve_stability(release_path, args)
+    version = resolve_release_version(release_path, release_type, args)
+
+    run_release(release_path, release_type, stability, version)
 
 
 if __name__ == "__main__":
