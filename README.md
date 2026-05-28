@@ -16,6 +16,8 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
   - `uv run just fix`
 - sync repos and inspect release state
   - `uv run just go`
+- find GitHub Actions runs after pushing an app tag
+  - `uv run just track-builds --path ot2 --tag internal@26.5.2801 --wait`
 
 ## Release Paths
 
@@ -23,12 +25,43 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 
 | Path | Repos | App repo | Version scheme |
 |---|---|---|---|
-| **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Semver (`v8.5.0`, alpha tags like `v8.5.0-alpha.6`) |
+| **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Per-repo prefixes (`ot3@`, `internal@`, `v`; see below) |
 | **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver (internal + external; see below) |
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo. It is not included in release tables or tagging.
 
 Each repo uses isolation branches named `chore_release-<version>` during a release cycle.
+
+### Tag push order
+
+Push annotated tags in this order. Stack repos first, app monorepo last.
+
+| Path | Order |
+|---|---|
+| **Flex** | `ot3-firmware` (if needed) → `oe-core` (if needed) → `opentrons` (app, always last) |
+| **OT-2** | `buildroot` (if needed) → `opentrons-ot2` (app, always last) |
+
+### Flex semver
+
+Flex repos use different tag prefixes. In `just go`, Flex uses **stable/unstable** stability (unstable = alpha).
+
+| Repo | Internal | External |
+|---|---|---|
+| `opentrons` | `ot3@X.Y.Z`, alpha `ot3@X.Y.Z-alpha.N` | `vX.Y.Z`, alpha `vX.Y.Z-alpha.N` |
+| `oe-core` | `internal@X.Y.Z`, alpha `internal@X.Y.Z-alpha.N` | `v0.X.Y` (independent line) |
+| `ot3-firmware` | `internal@vN` | `vN` |
+
+For internal alpha builds, `go` coordinates oe-core alpha numbers with the next `ot3@X.Y.Z-alpha.N` on `opentrons`. Internal oe-core and app stable tags use the prompted base version; if that exact tag already exists on the branch, `go` suggests a patch bump.
+
+### Track release builds
+
+After pushing the app tag, locate CI with `just track-builds`:
+
+```bash
+just track-builds --path ot2 --tag internal@26.5.2801 --wait
+```
+
+The script finds app, kickoff, and robot OS workflow runs and prints a Rich table plus a Slack copy block with two links (`app` and `ot2` or `flex`). With `--wait`, it polls every 15 seconds until all three workflow runs appear (default timeout 15 minutes).
 
 ## OT-2 calendar semver
 

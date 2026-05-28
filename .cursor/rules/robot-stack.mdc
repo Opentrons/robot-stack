@@ -21,7 +21,7 @@ The system supports internal and external release channels. This tool helps enfo
 
 | Path | Repos synced | App repo (tagging) | Version scheme |
 |---|---|---|---|
-| **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Semver with `v` prefix (e.g. `v8.5.0`, `v8.5.0-alpha.6`) |
+| **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Per-repo prefixes (see Flex semver below) |
 | **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver (see below) |
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo, but is not included in release tables or tagging.
@@ -67,6 +67,58 @@ Examples (May 26, 2026):
 External alpha/beta use semver prerelease numbering on a fixed base: `v26.6.0-alpha.0`, `v26.6.0-alpha.1`, `v26.6.0-beta.0`.
 
 External tags use a `v` prefix; internal tags use `internal@`.
+
+### Flex semver tagging
+
+Flex uses **different tag prefixes per repo**. In `just go`, Flex prompts for **Stability: stable/unstable** (not OT-2's alpha/beta/stable). `unstable` means alpha builds.
+
+| Repo | Internal | External |
+|---|---|---|
+| `opentrons` (app) | `ot3@X.Y.Z`, alpha `ot3@X.Y.Z-alpha.N` | `vX.Y.Z`, alpha `vX.Y.Z-alpha.N` |
+| `oe-core` (robot OS) | `internal@X.Y.Z`, alpha `internal@X.Y.Z-alpha.N` | `v0.X.Y` (independent line; patch bump from latest merged tag) |
+| `ot3-firmware` | `internal@vN` integer counter | `vN` integer counter |
+
+Tag suggestion rules in `automation/go.py`:
+
+- **App (`opentrons`):** base `X.Y.Z` comes from the prompted release version. Stable: `ot3@X.Y.Z` if missing, else patch bump. Alpha: increment `ot3@X.Y.Z-alpha.N` from branch tags.
+- **Robot OS (`oe-core`, internal):** base `X.Y.Z` comes from the same prompted version (not from the newest oe-core tag alone). Alpha `N` is **coordinated with the app**: `go` reads the next `ot3@X.Y.Z-alpha.N` from `opentrons` and reuses that `N` for `internal@X.Y.Z-alpha.N`. Stable: `internal@X.Y.Z` if missing, else patch bump.
+- **Firmware (`ot3-firmware`):** next integer above the highest merged channel tag (`internal@vN` or `vN`).
+
+### Tag push order
+
+Push annotated tags in this order. Dependent stack repos first, app monorepo last.
+
+| Path | Order |
+|---|---|
+| **Flex** | 1. `ot3-firmware` (if needed), 2. `oe-core` (if needed), 3. `opentrons` (app, always last) |
+| **OT-2** | 1. `buildroot` (if needed), 2. `opentrons-ot2` (app, always last) |
+
+`go` prints this order at the end of a release run.
+
+### Track release builds (`just track-builds`)
+
+After pushing the **app** tag, run `just track-builds --path flex|ot2 --tag <app-tag> --wait` (or without `--wait` for a one-shot lookup). `go` prints this command with `--wait` by default.
+
+`automation/track_builds.py` locates GitHub Actions runs for:
+
+1. **App** workflow on the monorepo (`App test, build, and deploy`)
+2. **Kickoff** cross-repo dispatch (`Start OT-2 build` or `Start Flex build`)
+3. **Robot OS** build in `buildroot` (OT-2) or `oe-core` (Flex)
+
+The Rich table also lists matching **key jobs** (deploy, desktop builds, dispatch spawn, robot image build). The **Slack copy block** includes only two links:
+
+```
+OT-2 release `internal@26.5.2801`
+
+- app: https://github.com/Opentrons/opentrons-ot2/actions/runs/...
+- ot2: https://github.com/Opentrons/buildroot/actions/runs/...
+```
+
+(Flex uses `- flex:` instead of `- ot2:`.)
+
+**`--wait` behavior:** poll every 15 seconds (default) until App, Kickoff, and Robot OS workflow runs all appear, up to 900 seconds (default). The poll loop only checks for workflow runs (not jobs). After all three runs exist, the script fetches key jobs with retries for transient GitHub 404s on the jobs API. Exit code `2` if any top-level run is still missing.
+
+Tag prefix inference when `--path` is omitted: `internal@` → OT-2, `ot3@` → Flex, otherwise Flex.
 
 ## Development Standards
 

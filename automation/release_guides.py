@@ -199,6 +199,55 @@ def _tag_need_section() -> str:
     """
 
 
+def _tag_push_order_section(robot: str) -> str:
+    """Explain annotated tag push order for one robot path."""
+    if robot == "flex":
+        rows = """
+        <tr><td>1</td><td><code>ot3-firmware</code></td><td>Firmware, if a new tag is needed</td></tr>
+        <tr><td>2</td><td><code>oe-core</code></td><td>Robot OS, if a new tag is needed</td></tr>
+        <tr><td>3</td><td><code>opentrons</code></td><td>App monorepo, always last</td></tr>"""
+        path_label = "Flex"
+    else:
+        rows = """
+        <tr><td>1</td><td><code>buildroot</code></td><td>Robot OS, if a new tag is needed</td></tr>
+        <tr><td>2</td><td><code>opentrons-ot2</code></td><td>App monorepo, always last</td></tr>"""
+        path_label = "OT-2"
+    return f"""
+    <h2>Tag push order</h2>
+    <p>Push annotated tags in this order. Dependent stack repos first, app monorepo last.
+    <code>just go</code> prints this reminder at the end of a release run.</p>
+    <table>
+      <thead><tr><th>Step</th><th>Repo</th><th>Notes</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    <p>{path_label} stack repos only get a new tag when their release branch tip is ahead of the
+    latest channel tag on that branch.</p>
+    """
+
+
+def _track_builds_section(robot: str, example_tag: str, slack_robot_label: str) -> str:
+    """Explain just track-builds for one robot path."""
+    path_flag = html.escape(robot)
+    tag = html.escape(example_tag)
+    slack_label = html.escape(slack_robot_label)
+    return f"""
+    <h2>Track release builds</h2>
+    <p>After pushing the app tag, run:</p>
+    <pre>just track-builds --path {path_flag} --tag {tag} --wait</pre>
+    <p><code>automation/track_builds.py</code> locates GitHub Actions runs for the app workflow,
+    the cross-repo kickoff workflow, and the robot OS build in
+    <code>{'buildroot' if robot == 'ot2' else 'oe-core'}</code>.</p>
+    <p>The Rich output includes a full table (including key jobs). The Slack copy block is shorter:</p>
+    <pre>{'OT-2' if robot == 'ot2' else 'Flex'} release `{tag}`
+
+- app: &lt;app workflow run URL&gt;
+- {slack_label}: &lt;robot OS workflow run URL&gt;</pre>
+    <p><strong><code>--wait</code></strong> polls every 15 seconds until app, kickoff, and robot OS
+    workflow runs all appear (default timeout 15 minutes). It avoids calling the jobs API during
+    polling, then retries job lookups if GitHub briefly returns 404 for a new run.</p>
+    """
+
+
 def _yaml_links(channel_host: str) -> str:
     """Render electron-updater YAML links for a host."""
     items = []
@@ -255,6 +304,10 @@ def render_flex_external() -> str:
     <p>External tags are simple integers: <code>v69</code>, <code>v70</code>, …</p>
     <p>When a new tag is needed, <code>go</code> takes the highest <code>vN</code> number merged
     into the branch and suggests <code>v(N+1)</code>.</p>
+
+    {_tag_push_order_section("flex")}
+
+    {_track_builds_section("flex", "v9.1.0", "flex")}
 
     <h2>Where to find published releases</h2>
     <p>External Flex artifacts live on <code>{html.escape(FLEX_EXTERNAL.app_host)}</code>.</p>
@@ -320,21 +373,32 @@ def render_flex_internal() -> str:
     <h2>How the next tag is chosen</h2>
     <h3>App (<code>opentrons</code>)</h3>
     <ul>
-      <li><strong>Stable:</strong> <code>ot3@X.Y.Z</code> if not already on the branch.</li>
-      <li><strong>Alpha (unstable):</strong> increment <code>ot3@X.Y.Z-alpha.N</code> from existing tags on the branch.</li>
+      <li><strong>Stable:</strong> <code>ot3@X.Y.Z</code> if not already on the branch; otherwise patch bump
+      (e.g. <code>ot3@8.5.0</code> → <code>ot3@8.5.1</code>).</li>
+      <li><strong>Alpha (unstable):</strong> increment <code>ot3@X.Y.Z-alpha.N</code> from existing tags on the branch
+      (first alpha is <code>ot3@8.5.0-alpha.0</code>).</li>
     </ul>
 
     <h3>Robot OS (<code>oe-core</code>)</h3>
     <p>Internal tags use the <code>internal@</code> prefix without a leading <code>v</code>.
-    The base version (e.g. <code>3.0.0</code>) comes from the newest <code>internal@</code> tag on the branch.</p>
+    The base <code>X.Y.Z</code> comes from the same version you enter at the <code>just go</code> prompt
+    (not from the newest oe-core tag alone).</p>
     <ul>
-      <li><strong>Alpha (unstable):</strong> <code>internal@3.0.0-alpha.N</code>, increment <code>N</code>.</li>
-      <li><strong>Stable:</strong> <code>internal@3.0.0</code>, or patch bump if that exact tag already exists.</li>
+      <li><strong>Alpha (unstable):</strong> <code>internal@X.Y.Z-alpha.N</code>. The alpha number
+      <code>N</code> is coordinated with the app: <code>go</code> reads the next
+      <code>ot3@X.Y.Z-alpha.N</code> from <code>opentrons</code> and reuses that <code>N</code>
+      for oe-core.</li>
+      <li><strong>Stable:</strong> <code>internal@X.Y.Z</code> if that exact tag is not on the branch;
+      otherwise patch bump (e.g. <code>internal@8.5.0</code> → <code>internal@8.5.1</code>).</li>
     </ul>
 
     <h3>Firmware (<code>ot3-firmware</code>)</h3>
     <p>Internal tags look like <code>internal@v26</code>, <code>internal@v27</code>.
     When needed, <code>go</code> suggests one higher than the max merged tag number.</p>
+
+    {_tag_push_order_section("flex")}
+
+    {_track_builds_section("flex", "ot3@8.5.0-alpha.0", "flex")}
 
     <h2>Where to find published releases</h2>
     <p>Internal Flex artifacts live on <code>{html.escape(FLEX_INTERNAL.app_host)}</code>.</p>
@@ -358,8 +422,8 @@ def render_flex_internal() -> str:
       <table>
         <thead><tr><th>Stability</th><th>App tag example</th><th>oe-core example</th></tr></thead>
         <tbody>
-          <tr><td>Stable internal</td><td><code>ot3@8.5.0</code> (uncommon)</td><td><code>internal@3.0.0</code></td></tr>
-          <tr><td>Alpha</td><td><code>ot3@8.5.0-alpha.0</code></td><td><code>internal@3.0.0-alpha.0</code></td></tr>
+          <tr><td>Stable internal</td><td><code>ot3@8.5.0</code></td><td><code>internal@8.5.0</code> (same prompted base)</td></tr>
+          <tr><td>Alpha</td><td><code>ot3@8.5.0-alpha.0</code></td><td><code>internal@8.5.0-alpha.0</code> (same <code>N</code> as app)</td></tr>
           <tr><td>Beta</td><td><code>ot3@8.5.0-beta.0</code> (manual)</td><td><code>internal@3.0.0-beta.0</code> (manual)</td></tr>
         </tbody>
       </table>
@@ -418,6 +482,10 @@ def render_ot2_external() -> str:
     <code>v26.6.0-alpha.0</code>, <code>v26.6.0-alpha.1</code>, or <code>v26.6.0-beta.0</code>, etc.</p>
     <p><code>buildroot</code> uses the same next-tag logic and should receive the matching tag when its
     branch has commits since the latest channel tag.</p>
+
+    {_tag_push_order_section("ot2")}
+
+    {_track_builds_section("ot2", "v26.6.0", "ot2")}
 
     <h2>Where to find published releases</h2>
     <p>External OT-2 artifacts live on <code>{html.escape(OT2_EXTERNAL.app_host)}</code>.</p>
@@ -507,6 +575,10 @@ def render_ot2_internal() -> str:
     (not <code>-alpha.N</code>). Same-day rebuilds still increment <code>DNN</code> in the patch.</p>
     <p>Examples: <code>internal@26.5.2601-alpha</code>, <code>internal@26.5.2602-alpha</code>.</p>
     <p><code>buildroot</code> receives the matching tag when its branch is ahead of the latest internal tag.</p>
+
+    {_tag_push_order_section("ot2")}
+
+    {_track_builds_section("ot2", "internal@26.5.2601", "ot2")}
 
     <h2>Where to find published releases</h2>
     <p>Internal OT-2 artifacts live on <code>{html.escape(OT2_INTERNAL.app_host)}</code>.</p>
