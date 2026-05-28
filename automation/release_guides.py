@@ -3,41 +3,21 @@
 from __future__ import annotations
 
 import html
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Tuple
 
 from automation.asset_urls import APP_CHANNEL_YAMLS, app_manifest_url, app_yaml_url, robot_manifest_url
 from automation.flex_urls import FLEX_EXTERNAL, FLEX_INTERNAL, FLEX_ROBOT_PREFIX
 from automation.ot2_urls import OT2_EXTERNAL, OT2_INTERNAL, OT2_ROBOT_PREFIX
+from automation.site_nav import GUIDE_NAV, render_site_header, site_nav_css
 
-GUIDE_PAGES: Final[Tuple[str, ...]] = (
-    "flex-external.html",
-    "flex-internal.html",
-    "ot2-external.html",
-    "ot2-internal.html",
-)
-
-
-@dataclass(frozen=True)
-class GuideLink:
-    """One guide page in the site nav."""
-
-    filename: str
-    title: str
-
-
-GUIDE_NAV: Final[Tuple[GuideLink, ...]] = (
-    GuideLink("flex-external.html", "Flex external"),
-    GuideLink("flex-internal.html", "Flex internal"),
-    GuideLink("ot2-external.html", "OT-2 external"),
-    GuideLink("ot2-internal.html", "OT-2 internal"),
-)
+GUIDE_PAGES: Final[Tuple[str, ...]] = tuple(item.filename for item in GUIDE_NAV)
 
 
 def _page_css() -> str:
     """Return shared stylesheet for guide pages."""
-    return """
+    return (
+        """
     :root {
       color-scheme: light dark;
       --bg: #0f1419;
@@ -80,21 +60,9 @@ def _page_css() -> str:
     h3 { margin-top: 1.5rem; }
     p, li { color: var(--text); }
     .lede { color: var(--muted); font-size: 1.05rem; }
-    nav.guide-nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem 1rem;
-      margin: 1.25rem 0 2rem;
-      padding: 0.75rem 1rem;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      font-size: 0.95rem;
-    }
-    nav.guide-nav a { color: var(--accent); text-decoration: none; }
-    nav.guide-nav a:hover { text-decoration: underline; }
-    nav.guide-nav a[aria-current="page"] { font-weight: 700; color: var(--text); }
-    nav.guide-nav .home { margin-right: 0.5rem; }
+    """
+        + site_nav_css()
+        + """
     table {
       width: 100%;
       border-collapse: collapse;
@@ -145,17 +113,7 @@ def _page_css() -> str:
       padding-top: 0;
     }
     """
-
-
-def _render_nav(current: str) -> str:
-    """Render guide navigation links."""
-    links = ['<a class="home" href="index.html">Home</a>']
-    for item in GUIDE_NAV:
-        if item.filename == current:
-            links.append(f'<a href="{html.escape(item.filename)}" aria-current="page">{html.escape(item.title)}</a>')
-        else:
-            links.append(f'<a href="{html.escape(item.filename)}">{html.escape(item.title)}</a>')
-    return f'<nav class="guide-nav" aria-label="Release guides">{"".join(links)}</nav>'
+    )
 
 
 def _wrap_page(filename: str, title: str, body: str) -> str:
@@ -169,8 +127,8 @@ def _wrap_page(filename: str, title: str, body: str) -> str:
   <style>{_page_css()}</style>
 </head>
 <body>
+  {render_site_header(filename)}
   <main>
-    {_render_nav(filename)}
     <h1>{html.escape(title)}</h1>
     {body}
   </main>
@@ -236,9 +194,9 @@ def _track_builds_section(robot: str, example_tag: str, slack_robot_label: str) 
     <pre>just track-builds --path {path_flag} --tag {tag} --wait</pre>
     <p><code>automation/track_builds.py</code> locates GitHub Actions runs for the app workflow,
     the cross-repo kickoff workflow, and the robot OS build in
-    <code>{'buildroot' if robot == 'ot2' else 'oe-core'}</code>.</p>
+    <code>{"buildroot" if robot == "ot2" else "oe-core"}</code>.</p>
     <p>The Rich output includes a full table (including key jobs). The Slack copy block is shorter:</p>
-    <pre>{'OT-2' if robot == 'ot2' else 'Flex'} release `{tag}`
+    <pre>{"OT-2" if robot == "ot2" else "Flex"} release `{tag}`
 
 - app: &lt;app workflow run URL&gt;
 - {slack_label}: &lt;robot OS workflow run URL&gt;</pre>
@@ -322,7 +280,7 @@ def render_flex_external() -> str:
     </table>
     <p>Electron-updater channel YAMLs (authoritative for app update prompts):</p>
     {_yaml_links(FLEX_EXTERNAL.app_host)}
-    <p>See also the live inventory: <a href="flex-assets.html">Flex release assets</a>.</p>
+    <p>See also the live inventory: <a href="flex-external-assets.html">Flex external assets</a>.</p>
 
     <div class="alpha-beta">
       <h2>Alpha and beta on Flex external</h2>
@@ -413,7 +371,7 @@ def render_flex_internal() -> str:
     </table>
     <p>Electron-updater YAMLs for internal app builds use the same filenames under the internal host:</p>
     {_yaml_links(FLEX_INTERNAL.app_host)}
-    <p>See also: <a href="flex-assets.html">Flex release assets</a>.</p>
+    <p>See also: <a href="flex-internal-assets.html">Flex internal assets</a>.</p>
 
     <div class="alpha-beta">
       <h2>Alpha and beta on Flex internal</h2>
@@ -504,7 +462,7 @@ def render_ot2_external() -> str:
       <li><a href="{html.escape(app_yaml_url(OT2_EXTERNAL, "beta.yml"))}"><code>beta.yml</code></a></li>
       <li><a href="{html.escape(app_yaml_url(OT2_EXTERNAL, "latest.yml"))}"><code>latest.yml</code></a></li>
     </ul>
-    <p>See also: <a href="ot2-assets.html">OT-2 release assets</a>.</p>
+    <p>See also: <a href="ot2-external-assets.html">OT-2 external assets</a>.</p>
 
     <div class="alpha-beta">
       <h2>Alpha and beta on OT-2 external</h2>
@@ -591,7 +549,7 @@ def render_ot2_internal() -> str:
             <td><a href="{html.escape(robot_json)}"><code>{html.escape(robot_json)}</code></a></td></tr>
       </tbody>
     </table>
-    <p>See also: <a href="ot2-assets.html">OT-2 release assets</a>.</p>
+    <p>See also: <a href="ot2-internal-assets.html">OT-2 internal assets</a>.</p>
 
     <div class="alpha-beta">
       <h2>Alpha and beta on OT-2 internal</h2>

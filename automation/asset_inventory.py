@@ -19,6 +19,7 @@ import yaml
 
 from automation.asset_urls import APP_CHANNEL_YAMLS, AssetChannel, app_manifest_url, app_yaml_url, robot_manifest_url
 from automation.go import decode_ot2_external_version, decode_ot2_internal_version
+from automation.site_nav import render_site_header, site_nav_css
 
 DEFAULT_LIMIT = 10
 
@@ -376,13 +377,20 @@ def render_errors(errors: Sequence[FetchError]) -> str:
     """
 
 
-def render_pipeline_map(config: ReleasePlatformConfig) -> str:
+def filter_pipeline_rows(config: ReleasePlatformConfig, channel: AssetChannel) -> Tuple[PipelineRow, ...]:
+    """Return pipeline rows relevant to one release channel."""
+    needle = channel.channel
+    return tuple(row for row in config.pipeline_rows if needle in row.component.lower())
+
+
+def render_pipeline_map(config: ReleasePlatformConfig, channel: Optional[AssetChannel] = None) -> str:
     """Document how CI maps build jobs to published URLs."""
+    rows_source = filter_pipeline_rows(config, channel) if channel is not None else config.pipeline_rows
     rows = "".join(
         f"<tr><td>{esc(row.component)}</td><td><code>{esc(row.workflow)}</code></td>"
         f"<td><code>{esc(row.s3_prefix)}</code></td><td><code>{esc(row.manifest)}</code></td>"
         f"<td><code>{esc(row.per_build_layout)}</code></td></tr>"
-        for row in config.pipeline_rows
+        for row in rows_source
     )
     return f"""
     <section>
@@ -511,18 +519,36 @@ def render_channel_section(snapshot: ChannelSnapshot, config: ReleasePlatformCon
     """
 
 
-def render_html(snapshots: Sequence[ChannelSnapshot], config: ReleasePlatformConfig, limit: int) -> str:
+def report_page_title(config: ReleasePlatformConfig, snapshots: Sequence[ChannelSnapshot]) -> str:
+    """Build the HTML document title for one or all channels."""
+    if len(snapshots) == 1:
+        return f"{config.display_name} {snapshots[0].channel.label} release assets"
+    return config.html_title
+
+
+def render_html(
+    snapshots: Sequence[ChannelSnapshot],
+    config: ReleasePlatformConfig,
+    limit: int,
+    *,
+    current_page: str = "",
+) -> str:
     """Render the full HTML report."""
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     all_errors = [err for snap in snapshots for err in snap.errors]
+    single_channel = snapshots[0].channel if len(snapshots) == 1 else None
+    page_title = report_page_title(config, snapshots)
     channel_html = "".join(render_channel_section(snap, config) for snap in snapshots)
+    header = render_site_header(current_page) if current_page else ""
+    nav_css = site_nav_css() if current_page else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{esc(config.html_title)}</title>
+  <title>{esc(page_title)}</title>
   <style>
+    {nav_css}
     :root {{
       color-scheme: light dark;
       --bg: #0f1419;
@@ -598,11 +624,12 @@ def render_html(snapshots: Sequence[ChannelSnapshot], config: ReleasePlatformCon
   </style>
 </head>
 <body>
+  {header}
   <main>
-    <h1>{esc(config.display_name)} release assets</h1>
+    <h1>{esc(page_title)}</h1>
     <p class="lede">Live inventory of {esc(config.display_name)} app and robot OS artifacts published to S3/CloudFront.
     Showing the {limit} most recent versions per manifest. Generated {esc(generated_at)}.</p>
-    {render_pipeline_map(config)}
+    {render_pipeline_map(config, single_channel)}
     {channel_html}
     {render_errors(all_errors)}
   </main>

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -162,8 +163,16 @@ def build_invalidation_plan(
 
 def format_create_invalidation_command(plan: CloudFrontInvalidationPlan, distribution_id: str) -> str:
     """Return a copy-paste aws cloudfront create-invalidation command."""
-    path_args = " ".join(plan.paths)
-    return f"aws cloudfront create-invalidation --profile {plan.profile} --distribution-id {distribution_id} --paths {path_args}"
+    path_args = " ".join(f'"{path}"' for path in plan.paths)
+    return (
+        f"aws cloudfront create-invalidation --profile {plan.profile} "
+        f"--distribution-id {distribution_id} --paths {path_args}"
+    )
+
+
+def print_copy_paste_command(command: str) -> None:
+    """Write the invalidation command on one stdout line (Rich truncates long lines)."""
+    sys.stdout.write(command + "\n")
 
 
 def format_cloudfront_invalidation_report(plan: CloudFrontInvalidationPlan) -> str:
@@ -172,6 +181,7 @@ def format_cloudfront_invalidation_report(plan: CloudFrontInvalidationPlan) -> s
     lines = [
         f"# {target.label} release ({target.host} via {target.infra_stack} prod)",
         f"url: {plan.distribution_url}",
+        "# CloudFront paths must start with / (API requirement). Copy the aws line as one line.",
     ]
 
     if plan.distribution_id is None:
@@ -189,14 +199,14 @@ def format_cloudfront_invalidation_report(plan: CloudFrontInvalidationPlan) -> s
         if target.terraform_output is not None:
             lines.append(f"# release-ci prod terraform output alternative: terraform output -raw {target.terraform_output}")
         placeholder_id = f"<distribution-id-for-{target.host}>"
-        lines.append(format_create_invalidation_command(plan, placeholder_id))
+        lines.append(f"# aws command printed below (single line)")
         return "\n".join(lines)
 
     lines.extend(
         [
             f"distribution_id: {plan.distribution_id}",
             f"paths: {' '.join(plan.paths)}",
-            format_create_invalidation_command(plan, plan.distribution_id),
+            "# aws command printed below (single line)",
         ]
     )
     return "\n".join(lines)
@@ -272,7 +282,12 @@ def print_cloudfront_invalidation(
         lookup_distribution_id=lookup_distribution_id,
     )
     report = format_cloudfront_invalidation_report(plan)
+    distribution_id = plan.distribution_id or f"<distribution-id-for-{plan.target.host}>"
+    command = format_create_invalidation_command(plan, distribution_id)
     out.print()
     out.print("[bold green]CloudFront invalidation[/]")
     out.print(report, soft_wrap=False)
+    out.print()
+    out.print("[bold]Copy-paste (single line):[/]")
+    print_copy_paste_command(command)
     return plan

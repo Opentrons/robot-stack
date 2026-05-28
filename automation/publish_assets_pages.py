@@ -6,31 +6,62 @@ from __future__ import annotations
 import argparse
 import asyncio
 import html
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
+
 from automation.asset_inventory import (
     ReleasePlatformConfig,
-    collect_snapshots,
+    fetch_channel_snapshot,
     render_html,
     serve_report,
     write_report,
 )
+from automation.asset_urls import AssetChannel
 from automation.flex_assets import FLEX_CONFIG
+from automation.flex_urls import FLEX_EXTERNAL, FLEX_INTERNAL
 from automation.ot2_assets import OT2_CONFIG
-from automation.release_guides import GUIDE_NAV, publish_release_guides
+from automation.ot2_urls import OT2_EXTERNAL, OT2_INTERNAL
+from automation.release_guides import publish_release_guides
+from automation.site_nav import ASSET_NAV, GUIDE_NAV, INDEX_PAGE, render_site_header, site_nav_css
 
 DEFAULT_OUTPUT_DIR = Path("pages")
 DEFAULT_LIMIT = 15
 DEFAULT_PORT = 8765
 
 
+@dataclass(frozen=True)
+class ChannelAssetPage:
+    """One per-channel asset inventory page."""
+
+    filename: str
+    config: ReleasePlatformConfig
+    channel: AssetChannel
+
+
+CHANNEL_ASSET_PAGES: tuple[ChannelAssetPage, ...] = (
+    ChannelAssetPage("flex-external-assets.html", FLEX_CONFIG, FLEX_EXTERNAL),
+    ChannelAssetPage("flex-internal-assets.html", FLEX_CONFIG, FLEX_INTERNAL),
+    ChannelAssetPage("ot2-external-assets.html", OT2_CONFIG, OT2_EXTERNAL),
+    ChannelAssetPage("ot2-internal-assets.html", OT2_CONFIG, OT2_INTERNAL),
+)
+
+
 def render_index(generated_at: str, limit: int) -> str:
-    """Render a landing page linking to both platform reports and release guides."""
+    """Render a landing page linking to channel asset reports and release guides."""
+    asset_items = "".join(
+        f"""
+      <li>
+        <a href="{html.escape(item.filename)}">{html.escape(item.title)}</a>
+      </li>"""
+        for item in ASSET_NAV
+    )
     guide_items = "".join(
         f"""
       <li>
-        <a href="{html.escape(item.filename)}">{html.escape(item.title)} release guide</a>
+        <a href="{html.escape(item.filename)}">{html.escape(item.title)}</a>
         <div class="meta">Tag logic and manifest URLs for <code>just go</code></div>
       </li>"""
         for item in GUIDE_NAV
@@ -42,6 +73,7 @@ def render_index(generated_at: str, limit: int) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Opentrons release assets</title>
   <style>
+    {site_nav_css()}
     :root {{
       color-scheme: light dark;
       --bg: #0f1419;
@@ -108,21 +140,14 @@ def render_index(generated_at: str, limit: int) -> str:
   </style>
 </head>
 <body>
+  {render_site_header(INDEX_PAGE)}
   <main>
     <h1>Opentrons release assets</h1>
     <p>Live inventories of app and robot OS artifacts from S3/CloudFront.
     Each report shows the {limit} most recent versions per manifest.
     Updated {html.escape(generated_at)}.</p>
     <ul>
-      <li class="section-title">Live asset inventories</li>
-      <li>
-        <a href="flex-assets.html">Flex release assets</a>
-        <div class="meta">App (<code>opentrons</code>) and robot OS (<code>oe-core</code>)</div>
-      </li>
-      <li>
-        <a href="ot2-assets.html">OT-2 release assets</a>
-        <div class="meta">App (<code>opentrons-ot2</code>) and robot OS (<code>buildroot</code>)</div>
-      </li>
+      <li class="section-title">Live asset inventories</li>{asset_items}
       <li class="section-title">Release guides</li>{guide_items}
     </ul>
   </main>
@@ -131,24 +156,34 @@ def render_index(generated_at: str, limit: int) -> str:
 """
 
 
-async def generate_platform_report(config: ReleasePlatformConfig, output: Path, limit: int) -> None:
-    """Fetch manifests and write one platform HTML report."""
-    snapshots = await collect_snapshots(config, limit)
-    write_report(output, render_html(snapshots, config, limit))
+async def generate_channel_asset_report(page: ChannelAssetPage, output: Path, limit: int) -> None:
+    """Fetch one channel manifest set and write its HTML report."""
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        snapshot = await fetch_channel_snapshot(client, page.channel, page.config, limit)
+    write_report(
+        output,
+        render_html([snapshot], page.config, limit, current_page=page.filename),
+    )
     print(f"Wrote {output.resolve()}")
 
 
 async def publish_pages(output_dir: Path, limit: int) -> None:
-    """Generate index, asset inventories, and release guides under output_dir."""
+    """Generate index, per-channel asset inventories, and release guides under output_dir."""
     output_dir.mkdir(parents=True, exist_ok=True)
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     await asyncio.gather(
-        generate_platform_report(FLEX_CONFIG, output_dir / "flex-assets.html", limit),
-        generate_platform_report(OT2_CONFIG, output_dir / "ot2-assets.html", limit),
+        *[
+            generate_channel_asset_report(
+                page,
+                output_dir / page.filename,
+                limit,
+            )
+            for page in CHANNEL_ASSET_PAGES
+        ]
     )
     publish_release_guides(output_dir)
-    index_path = output_dir / "index.html"
+    index_path = output_dir / INDEX_PAGE
     write_report(index_path, render_index(generated_at, limit))
     print(f"Wrote {index_path.resolve()}")
 
@@ -188,7 +223,7 @@ def main() -> None:
     args = build_parser().parse_args()
     asyncio.run(publish_pages(args.output_dir, args.limit))
     if args.serve:
-        serve_report(args.output_dir / "index.html", args.port, args.open_browser)
+        serve_report(args.output_dir / INDEX_PAGE, args.port, args.open_browser)
 
 
 if __name__ == "__main__":

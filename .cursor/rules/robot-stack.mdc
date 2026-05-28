@@ -238,7 +238,7 @@ Fetch live S3/CloudFront manifests and write HTML reports. Read-only against pub
 |---|---|---|
 | `just ot2-assets` | `automation/ot2_assets.py` | `.build/ot2-assets.html` |
 | `just flex-assets` | `automation/flex_assets.py` | `.build/flex-assets.html` |
-| `just assets-pages` | `automation/publish_assets_pages.py` | `pages/` (index + both inventories + release guides) |
+| `just assets-pages` | `automation/publish_assets_pages.py` | `pages/` (index + per-channel asset inventories + release guides) |
 | `just assets-serve` | same with `--serve --open-browser` | serves `pages/` on port `8765` |
 
 Shared flags (per-platform scripts): `--limit`, `--output`, `--serve`, `--port`, `--open-browser`.
