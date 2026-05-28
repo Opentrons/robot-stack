@@ -18,6 +18,10 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
+from automation.flex_release_version import (
+    flex_external_default_release_version,
+    flex_internal_default_release_version,
+)
 from automation.ot2_calendar_semver import (
     Ot2Stability,
     decode_ot2_external_version,
@@ -44,14 +48,6 @@ class RepoSpec:
     external_tag_pattern: str
     internal_tag_pattern: str
 
-    def branches_to_sync(self, version: str) -> List[str]:
-        """Decide which branches to sync based on the base version."""
-        branches = [self.default_branch]
-        chore = chore_release_branch(version)
-        if branch_exists(self.repo_url, chore):
-            branches.append(chore)
-        return branches
-
 
 @dataclass
 class RepoState:
@@ -68,7 +64,6 @@ class TagPlan:
     next_tag: Optional[str]
     branch: str
     reason: str
-
 
 
 OT3_FIRMWARE_EXTERNAL_TAG_RE = re.compile(r"^v(\d+)$")
@@ -88,6 +83,34 @@ def strip_tag_version(tag: str) -> str:
 def chore_release_branch(version: str) -> str:
     """Return the chore_release branch name for a release version."""
     return f"chore_release-{version.lstrip('v')}"
+
+
+def release_on_default_branch(release_path: ReleasePath, release_type: str) -> bool:
+    """Return True when releases tag default-branch HEAD instead of chore_release."""
+    if release_path.name == "ot2":
+        return True
+    return release_path.name == "flex" and release_type == "internal"
+
+
+def branches_to_sync(
+    repo: RepoSpec,
+    version: str,
+    release_path: ReleasePath,
+    release_type: str,
+) -> List[str]:
+    """Decide which branches to sync based on release path and channel.
+
+    Flex external also syncs ``chore_release-<version>`` when that branch exists
+    on the remote. Flex internal and all OT-2 releases sync only the default branch.
+    """
+    if release_on_default_branch(release_path, release_type):
+        return [repo.default_branch]
+
+    branches = [repo.default_branch]
+    chore = chore_release_branch(version)
+    if branch_exists(repo.repo_url, chore):
+        branches.append(chore)
+    return branches
 
 
 # ------------------------------------------------------------------------------
@@ -112,12 +135,100 @@ def branch_exists(repo_url: str, branch_name: str) -> bool:
         return False
 
 
+def remote_branch_names(repo_url: str) -> List[str]:
+    """Return remote branch names from a git repository URL."""
+    try:
+        lines = run_git_command(["ls-remote", "--heads", repo_url]).splitlines()
+    except RuntimeError:
+        return []
+
+    names: List[str] = []
+    for line in lines:
+        if not line:
+            continue
+        _commit, ref = line.split("\t", maxsplit=1)
+        if ref.startswith("refs/heads/"):
+            names.append(ref.removeprefix("refs/heads/"))
+    return names
+
+
+def local_branch_names(repo: RepoSpec) -> List[str]:
+    """Return local and remote-tracking branch names when the repo is cloned."""
+    if not (repo.local_path / ".git").exists():
+        return []
+
+    names: List[str] = []
+    for line in run_git_command(["branch", "-a"], cwd=repo.local_path).splitlines():
+        branch = line.strip().strip("* ").strip()
+        if branch.startswith("remotes/origin/"):
+            branch = branch.removeprefix("remotes/origin/")
+        if branch in {"HEAD", "origin"} or "->" in branch:
+            continue
+        names.append(branch)
+    return names
+
+
+def local_flex_external_app_tags(repo: RepoSpec) -> List[str]:
+    """Return recent Flex external app tags from a local clone, if present."""
+    if not (repo.local_path / ".git").exists():
+        return []
+
+    try:
+        return run_git_command(
+            ["tag", "-l", "v*", "--sort=-v:refname"],
+            cwd=repo.local_path,
+        ).splitlines()[:50]
+    except RuntimeError:
+        return []
+
+
+def local_flex_internal_app_tags(repo: RepoSpec) -> List[str]:
+    """Return recent ot3@ tags merged into the default branch from a local clone."""
+    if not (repo.local_path / ".git").exists():
+        return []
+
+    try:
+        return run_git_command(
+            [
+                "tag",
+                "-l",
+                "ot3@*",
+                "--merged",
+                repo.default_branch,
+                "--sort=-v:refname",
+            ],
+            cwd=repo.local_path,
+        ).splitlines()[:50]
+    except RuntimeError:
+        return []
+
+
+def infer_flex_default_release_version(release_type: str) -> Optional[str]:
+    """Infer the active Flex base version from opentrons tags or release branches."""
+    app_repo = repo_by_name("opentrons")
+    if release_type == "internal":
+        return flex_internal_default_release_version(local_flex_internal_app_tags(app_repo))
+
+    branch_names = remote_branch_names(app_repo.repo_url)
+    if not branch_names:
+        branch_names = local_branch_names(app_repo)
+    return flex_external_default_release_version(
+        branch_names,
+        app_tags=local_flex_external_app_tags(app_repo),
+    )
+
+
 # ------------------------------------------------------------------------------
 # Per-Repo Task
 # ------------------------------------------------------------------------------
 
 
-def process_repo(repo: RepoSpec, version: str) -> RepoState:
+def process_repo(
+    repo: RepoSpec,
+    version: str,
+    release_path: ReleasePath,
+    release_type: str,
+) -> RepoState:
     """Clone or fetch the repo, checkout branches, and collect tags."""
     # clone or fetch
     if not (repo.local_path / ".git").exists():
@@ -126,7 +237,7 @@ def process_repo(repo: RepoSpec, version: str) -> RepoState:
         run_git_command(["fetch", "--all"], cwd=repo.local_path)
 
     # checkout branches
-    branches = repo.branches_to_sync(version)
+    branches = branches_to_sync(repo, version, release_path, release_type)
     for br in branches:
         existing = [b.strip("* ").strip() for b in run_git_command(["branch"], cwd=repo.local_path).splitlines()]
         if br not in existing:
@@ -196,8 +307,21 @@ def format_tag_commands(next_tag: str, release_version: str) -> Tuple[str, str, 
     return create, verify, push
 
 
-def release_branch_for_repo(state: RepoState, repo: RepoSpec, version: str) -> str:
-    """Return chore_release when present, otherwise the repo default branch."""
+def release_branch_for_repo(
+    state: RepoState,
+    repo: RepoSpec,
+    version: str,
+    release_path: ReleasePath,
+    release_type: str,
+) -> str:
+    """Return the branch to tag.
+
+    Flex external prefers ``chore_release-<version>`` when that branch was synced
+    locally. Flex internal and all OT-2 releases use the repo default branch.
+    """
+    if release_on_default_branch(release_path, release_type):
+        return repo.default_branch
+
     chore = chore_release_branch(version)
     return chore if chore in state.branch_tags else repo.default_branch
 
@@ -383,6 +507,8 @@ def flex_internal_alpha_from_opentrons(
     results: Dict[str, RepoState],
     version: str,
     stability: str,
+    release_path: ReleasePath,
+    release_type: str,
 ) -> Optional[int]:
     """Return the coordinated internal alpha number derived from opentrons ot3@ tags."""
     if stability != "unstable":
@@ -393,7 +519,7 @@ def flex_internal_alpha_from_opentrons(
     if app_state is None:
         return None
 
-    branch = release_branch_for_repo(app_state, app_repo, version)
+    branch = release_branch_for_repo(app_state, app_repo, version, release_path, release_type)
     base = flex_release_semver_base(version)
     branch_tags = tags_merged_on_branch(app_state, branch)
     return next_alpha_number(f"ot3@{base}-alpha.", branch_tags)
@@ -424,7 +550,11 @@ def get_next_stack_repo_tag(
         internal_alpha: Optional[int] = None
         if release_type == "internal" and release_path.name == "flex":
             internal_base = flex_release_semver_base(version)
-            internal_alpha = flex_internal_alpha_from_opentrons(results, version, stability) if results is not None else None
+            internal_alpha = (
+                flex_internal_alpha_from_opentrons(results, version, stability, release_path, release_type)
+                if results is not None
+                else None
+            )
         return get_next_oe_core_tag_command(
             state,
             branch,
@@ -448,7 +578,7 @@ def get_stack_repo_tag_plan(
     results: Optional[Dict[str, RepoState]] = None,
 ) -> TagPlan:
     """Decide whether a stack repo needs a tag and what it should be."""
-    branch = release_branch_for_repo(state, repo, version)
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
     latest_tag = latest_channel_tag(state, repo, branch, release_type)
     needs_tag = needs_new_tag(repo, branch, latest_tag)
 
@@ -563,7 +693,13 @@ def get_next_tag_command(
 # ------------------------------------------------------------------------------
 
 
-def print_external_table(results: Dict[str, RepoState], repos: List[RepoSpec], version: str) -> None:
+def print_external_table(
+    results: Dict[str, RepoState],
+    repos: List[RepoSpec],
+    version: str,
+    release_path: ReleasePath,
+    release_type: str,
+) -> None:
     """Print a table of external compare URLs, using chore_release branch if present."""
     tbl = Table(title="External GitHub Compare URLs")
     tbl.add_column("Repo", style="bold")
@@ -575,8 +711,7 @@ def print_external_table(results: Dict[str, RepoState], repos: List[RepoSpec], v
             continue
 
         pat = repo.external_tag_pattern
-        chore = chore_release_branch(version)
-        branch = chore if chore in st.branch_tags else repo.default_branch
+        branch = release_branch_for_repo(st, repo, version, release_path, release_type)
         tags = st.branch_tags[branch].get(pat, [])
         tag = tags[0] if tags else None
         base = repo.repo_url.removesuffix(".git")
@@ -592,8 +727,14 @@ def print_external_table(results: Dict[str, RepoState], repos: List[RepoSpec], v
     console.print(tbl)
 
 
-def print_internal_table(results: Dict[str, RepoState], repos: List[RepoSpec], version: str) -> None:
-    """Print a table of internal compare URLs, using chore_release branch if present."""
+def print_internal_table(
+    results: Dict[str, RepoState],
+    repos: List[RepoSpec],
+    version: str,
+    release_path: ReleasePath,
+    release_type: str,
+) -> None:
+    """Print a table of internal compare URLs for the release branch."""
     tbl = Table(title="Internal GitHub Compare URLs")
     tbl.add_column("Repo", style="bold")
     tbl.add_column("Compare", no_wrap=True)
@@ -604,8 +745,7 @@ def print_internal_table(results: Dict[str, RepoState], repos: List[RepoSpec], v
             continue
 
         pat = repo.internal_tag_pattern
-        chore = chore_release_branch(version)
-        branch = chore if chore in st.branch_tags else repo.default_branch
+        branch = release_branch_for_repo(st, repo, version, release_path, release_type)
         tags = st.branch_tags[branch].get(pat, [])
         tag = tags[0] if tags else None
         base = repo.repo_url.removesuffix(".git")
@@ -748,7 +888,11 @@ def repos_to_sync(path: ReleasePath) -> List[RepoSpec]:
 
 def prompt_release_version(release_path: ReleasePath, release_type: str = "external") -> str:
     """Prompt for the base release version appropriate to the selected robot path."""
-    default_version = default_release_version(release_path, release_type)
+    try:
+        default_version = default_release_version(release_path, release_type)
+    except ValueError as err:
+        console.print(f"[yellow]{err}[/]")
+        default_version = ""
     if release_path.name == "ot2":
         if release_type == "external":
             prompt_label = "Base version (OT-2 external YY.M.N)"
@@ -793,7 +937,13 @@ def default_release_version(release_path: ReleasePath, release_type: str) -> str
         if release_type == "external":
             return ot2_external_version_for_month()
         return ot2_internal_version_for_date()
-    return "v8.5.0"
+
+    version = infer_flex_default_release_version(release_type)
+    if version is not None:
+        return version
+    if release_type == "internal":
+        raise ValueError("Could not infer Flex base version from opentrons ot3@ tags on edge; pass --version (e.g. v3.1.0)")
+    raise ValueError("Could not infer Flex base version from opentrons chore_release branches; pass --version (e.g. v9.1.0)")
 
 
 def normalize_release_version(release_path: ReleasePath, release_type: str, version: str) -> str:
@@ -897,7 +1047,11 @@ def resolve_release_version(release_path: ReleasePath, release_type: str, args: 
             console.print(f"[red]Invalid version: {err}[/]")
             sys.exit(1)
     if args.non_interactive:
-        return default_release_version(release_path, release_type)
+        try:
+            return default_release_version(release_path, release_type)
+        except ValueError as err:
+            console.print(f"[red]{err}[/]")
+            sys.exit(1)
     return prompt_release_version(release_path, release_type)
 
 
@@ -911,7 +1065,12 @@ ASSUMPTIONS_MARKDOWN = Markdown(
     `git tag -a v0.10.1 -m 'chore(release): v8.4.0-alpha.8'`
     - This gives the tag a message, creator, and date
     - Then we use `git tag -l --sort=-creatordate` to get the latest tag
-- Across every robot-stack repo, isolation branches for a release cycle look like: `chore_release-<version>`
+- Flex **external** releases use isolation branches named `chore_release-<version>` when present
+- Flex **internal** and all **OT-2** releases tag default-branch HEAD
+  (`edge` / `opentrons-develop` / `main`); no `chore_release` branch
+  - `opentrons`: `ot3@X.Y.Z` / `ot3@X.Y.Z-alpha.N`
+  - `oe-core`: `internal@X.Y.Z` / `internal@X.Y.Z-alpha.N`
+  - `ot3-firmware`: `internal@vN` integer counter
 """
 )
 
@@ -942,7 +1101,7 @@ def compute_app_tag(
     if state is None:
         return None
 
-    branch = release_branch_for_repo(state, repo, version)
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
     try:
         return get_next_tag_command(
             repo,
@@ -973,7 +1132,7 @@ def print_app_tag_section(
         return
 
     pattern = repo.external_tag_pattern if release_type == "external" else repo.internal_tag_pattern
-    branch = release_branch_for_repo(state, repo, version)
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
     tags = state.branch_tags[branch].get(pattern, [])
     latest_tag = tags[0] if tags else None
     if latest_tag:
@@ -1064,7 +1223,7 @@ def run_release(
 
     results: Dict[str, RepoState] = {}
     with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(process_repo, r, version): r for r in sync_repos}
+        futures = {executor.submit(process_repo, r, version, release_path, release_type): r for r in sync_repos}
         for future in as_completed(futures):
             repo = futures[future]
             try:
@@ -1085,8 +1244,7 @@ def run_release(
             continue
 
         pattern = repo.external_tag_pattern if release_type == "external" else repo.internal_tag_pattern
-        chore = chore_release_branch(version)
-        branch = chore if chore in st.branch_tags else repo.default_branch
+        branch = release_branch_for_repo(st, repo, version, release_path, release_type)
         tags = st.branch_tags[branch].get(pattern, [])
         tag = tags[0] if tags else None
 
@@ -1100,9 +1258,9 @@ def run_release(
     console.print(summary)
 
     if release_type == "external":
-        print_external_table(results, active_repos, version)
+        print_external_table(results, active_repos, version, release_path, release_type)
     else:
-        print_internal_table(results, active_repos, version)
+        print_internal_table(results, active_repos, version, release_path, release_type)
 
     print_tag_push_order_note(release_path)
 

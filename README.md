@@ -33,7 +33,7 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo. It is not included in release tables or tagging.
 
-Each repo uses isolation branches named `chore_release-<version>` during a release cycle.
+Each repo uses isolation branches named `chore_release-<version>` during a **Flex external** release cycle. Flex **internal** and all **OT-2** releases tag default-branch HEAD instead (`edge` / `opentrons-develop` / `main`).
 
 ### Tag push order
 
