@@ -309,27 +309,57 @@ def find_robot_tag_run(
     return min(matches, key=lambda run: parse_created_at(run.created_at))
 
 
-def list_run_jobs(repo: str, run_id: int) -> list[WorkflowJob]:
-    """Return all jobs for one workflow run."""
-    data = gh_json(["run", "view", str(run_id), "--repo", repo, "--json", "jobs"])
-    if not isinstance(data, dict):
-        return []
-    jobs_raw = data.get("jobs")
-    if not isinstance(jobs_raw, list):
-        return []
-    jobs: list[WorkflowJob] = []
-    for item in jobs_raw:
-        if not isinstance(item, dict):
-            continue
-        jobs.append(
-            WorkflowJob(
-                name=str(item.get("name") or ""),
-                url=str(item.get("url") or ""),
-                status=str(item.get("status") or ""),
-                conclusion=item.get("conclusion"),
-            )
+def list_run_jobs(
+    repo: str,
+    run_id: int,
+    *,
+    max_attempts: int = 1,
+    retry_seconds: float = 2.0,
+) -> list[WorkflowJob]:
+    """Return all jobs for one workflow run.
+
+    GitHub can briefly return 404 for /jobs on runs that just appeared in
+    run list; retry when callers expect jobs to exist soon.
+    """
+    for attempt in range(max_attempts):
+        result = subprocess.run(
+            ["gh", "run", "view", str(run_id), "--repo", repo, "--json", "jobs"],
+            text=True,
+            capture_output=True,
+            check=False,
         )
-    return jobs
+        if result.returncode == 0:
+            if not result.stdout.strip():
+                return []
+            data = json.loads(result.stdout)
+            if not isinstance(data, dict):
+                return []
+            jobs_raw = data.get("jobs")
+            if not isinstance(jobs_raw, list):
+                return []
+            jobs: list[WorkflowJob] = []
+            for item in jobs_raw:
+                if not isinstance(item, dict):
+                    continue
+                jobs.append(
+                    WorkflowJob(
+                        name=str(item.get("name") or ""),
+                        url=str(item.get("url") or ""),
+                        status=str(item.get("status") or ""),
+                        conclusion=item.get("conclusion"),
+                    )
+                )
+            return jobs
+
+        stderr = result.stderr.strip()
+        if "404" in stderr and attempt + 1 < max_attempts:
+            time.sleep(retry_seconds)
+            continue
+        if "404" in stderr:
+            return []
+        raise RuntimeError(stderr or f"gh run view {run_id} --repo {repo} failed with exit code {result.returncode}")
+
+    return []
 
 
 def pick_key_jobs(jobs: Sequence[WorkflowJob], patterns: Sequence[re.Pattern[str]]) -> list[WorkflowJob]:
@@ -388,6 +418,9 @@ def collect_build_stages(
     tag: str,
     run_limit: int,
     robot_max_pages: int,
+    *,
+    include_jobs: bool = True,
+    job_fetch_attempts: int = 1,
 ) -> list[BuildStage]:
     """Resolve app, kickoff, and robot OS workflow runs for a tag."""
     app_runs = list_workflow_runs(path.monorepo, APP_WORKFLOW, run_limit)
@@ -445,8 +478,14 @@ def collect_build_stages(
         )
 
     extra_jobs: list[BuildStage] = []
+    if not include_jobs:
+        return resolved + extra_jobs
+
     if app_run is not None:
-        for job in pick_key_jobs(list_run_jobs(path.monorepo, app_run.database_id), APP_KEY_JOB_PATTERNS):
+        for job in pick_key_jobs(
+            list_run_jobs(path.monorepo, app_run.database_id, max_attempts=job_fetch_attempts),
+            APP_KEY_JOB_PATTERNS,
+        ):
             lookup, _ = status_label(app_run, job)
             extra_jobs.append(
                 BuildStage(
@@ -461,7 +500,7 @@ def collect_build_stages(
 
     if dispatch_run is not None:
         for job in pick_key_jobs(
-            list_run_jobs(path.monorepo, dispatch_run.database_id),
+            list_run_jobs(path.monorepo, dispatch_run.database_id, max_attempts=job_fetch_attempts),
             DISPATCH_KEY_JOB_PATTERNS,
         ):
             lookup, _ = status_label(dispatch_run, job)
@@ -478,7 +517,7 @@ def collect_build_stages(
 
     if robot_run is not None:
         for job in pick_key_jobs(
-            list_run_jobs(path.robot_repo, robot_run.database_id),
+            list_run_jobs(path.robot_repo, robot_run.database_id, max_attempts=job_fetch_attempts),
             ROBOT_KEY_JOB_PATTERNS,
         ):
             lookup, _ = status_label(robot_run, job)
@@ -541,29 +580,24 @@ def render_report(path: PathConfig, tag: str, stages: Sequence[BuildStage]) -> N
     console.print()
     console.print(table)
 
+    robot_slack_label = path.label.lower().replace("-", "")
+    slack_stage_labels = {
+        "App": "app",
+        "Robot OS": robot_slack_label,
+    }
     slack_lines = [
         f"{path.label} release `{tag}`",
         "",
     ]
     for stage in stages:
-        if stage.stage.endswith(" job"):
+        slack_label = slack_stage_labels.get(stage.stage)
+        if slack_label is None:
             continue
         url = stage_url(stage)
         if url is None:
-            slack_lines.append(f"- {stage.stage}: not found yet")
+            slack_lines.append(f"- {slack_label}: not found yet")
         else:
-            _, label = status_label(stage.run, stage.job)
-            slack_lines.append(f"- {stage.stage} ({label}): {url}")
-
-    slack_lines.extend(["", "Key jobs:"])
-    for stage in stages:
-        if not stage.stage.endswith(" job"):
-            continue
-        url = stage_url(stage)
-        if url is None:
-            continue
-        _, label = status_label(stage.run, stage.job)
-        slack_lines.append(f"- {stage.description} ({label}): {url}")
+            slack_lines.append(f"- {slack_label}: {url}")
 
     slack_block = "\n".join(slack_lines)
     console.print()
@@ -582,12 +616,32 @@ def wait_for_stages(
     """Poll GitHub until the main workflow runs appear or timeout."""
     deadline = time.time() + timeout_seconds
     while True:
-        stages = collect_build_stages(path, tag, run_limit, robot_max_pages)
+        stages = collect_build_stages(
+            path,
+            tag,
+            run_limit,
+            robot_max_pages,
+            include_jobs=False,
+        )
         top_level = [stage for stage in stages if not stage.stage.endswith(" job")]
         if all(stage.run is not None for stage in top_level):
-            return stages
+            return collect_build_stages(
+                path,
+                tag,
+                run_limit,
+                robot_max_pages,
+                include_jobs=True,
+                job_fetch_attempts=5,
+            )
         if time.time() >= deadline:
-            return stages
+            return collect_build_stages(
+                path,
+                tag,
+                run_limit,
+                robot_max_pages,
+                include_jobs=True,
+                job_fetch_attempts=1,
+            )
         missing = [stage.stage for stage in top_level if stage.run is None]
         console.print(f"[yellow]Waiting for {', '.join(missing)} workflow runs...[/] (retry in {poll_seconds}s)")
         time.sleep(poll_seconds)

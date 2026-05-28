@@ -184,7 +184,7 @@ ot2_version_for_date = ot2_internal_version_for_date
 
 def strip_tag_version(tag: str) -> str:
     """Remove known tag prefixes so version parsing can inspect the semver."""
-    for prefix in ("internal@", "v"):
+    for prefix in ("internal@", "ot3@", "v"):
         if tag.startswith(prefix):
             return tag[len(prefix) :]
     return tag
@@ -386,16 +386,35 @@ def next_alpha_tag(tag_prefix: str, tags: List[str]) -> str:
     return f"{tag_prefix}{next_num}"
 
 
-def oe_core_internal_base_version(state: RepoState, branch: str) -> str:
-    """Parse the semver base from the newest internal@ tag on a branch."""
-    internal_tags = state.branch_tags.get(branch, {}).get("internal@", [])
-    if not internal_tags:
-        raise ValueError("No internal@ tags merged into branch")
+def next_alpha_number(tag_prefix: str, tags: List[str]) -> int:
+    """Return the next alpha build number for a fixed alpha prefix."""
+    matching = [tag for tag in tags if tag.startswith(tag_prefix)]
+    numbers: List[int] = []
+    for tag in matching:
+        match = re.match(rf"{re.escape(tag_prefix)}(\d+)", tag)
+        if match is not None:
+            numbers.append(int(match.group(1)))
+    return max(numbers) + 1 if numbers else 0
 
-    clean = strip_tag_version(internal_tags[0])
-    match = re.match(r"^(\d+\.\d+\.\d+)", clean)
+
+SEMVER_BASE_RE = re.compile(r"^(\d+\.\d+\.\d+)")
+
+
+def semver_base_from_tag(tag: str) -> str:
+    """Parse the X.Y.Z base from a release tag after stripping its prefix."""
+    clean = strip_tag_version(tag)
+    match = SEMVER_BASE_RE.match(clean)
     if match is None:
-        raise ValueError(f"Cannot parse oe-core internal base from {internal_tags[0]}")
+        raise ValueError(f"Cannot parse semver base from {tag}")
+    return match.group(1)
+
+
+def flex_release_semver_base(version: str) -> str:
+    """Normalize the prompted Flex base version to X.Y.Z semver."""
+    clean = version.lstrip("v")
+    match = SEMVER_BASE_RE.match(clean)
+    if match is None:
+        raise ValueError(f"Invalid Flex base version: {version}")
     return match.group(1)
 
 
@@ -404,14 +423,28 @@ def get_next_oe_core_tag_command(
     branch: str,
     release_type: str,
     stability: str,
+    internal_semver_base: Optional[str] = None,
+    internal_alpha_number: Optional[int] = None,
 ) -> str:
     """Suggest the next oe-core tag from tags merged into the release branch."""
     branch_tags = tags_merged_on_branch(state, branch)
 
     if release_type == "internal":
-        base = oe_core_internal_base_version(state, branch)
+        if internal_semver_base is None:
+            internal_tags = state.branch_tags.get(branch, {}).get("internal@", [])
+            if not internal_tags:
+                raise ValueError("No internal@ tags merged into branch")
+            base = semver_base_from_tag(internal_tags[0])
+        else:
+            base = internal_semver_base
+
         if stability == "unstable":
-            return next_alpha_tag(f"internal@{base}-alpha.", branch_tags)
+            alpha_num = (
+                internal_alpha_number
+                if internal_alpha_number is not None
+                else next_alpha_number(f"internal@{base}-alpha.", branch_tags)
+            )
+            return f"internal@{base}-alpha.{alpha_num}"
 
         candidate = f"internal@{base}"
         if candidate not in branch_tags:
@@ -426,6 +459,38 @@ def get_next_oe_core_tag_command(
     latest = external_tags[0]
     next_version = semver.VersionInfo.parse(strip_tag_version(latest)).bump_patch()
     return f"v{next_version}"
+
+
+def get_next_flex_app_tag_command(
+    state: RepoState,
+    branch: str,
+    release_type: str,
+    stability: str,
+    version: str,
+) -> str:
+    """Suggest the next opentrons tag for Flex (ot3@ internal, v external)."""
+    branch_tags = tags_merged_on_branch(state, branch)
+
+    if release_type == "internal":
+        base = flex_release_semver_base(version)
+        if stability == "unstable":
+            alpha_num = next_alpha_number(f"ot3@{base}-alpha.", branch_tags)
+            return f"ot3@{base}-alpha.{alpha_num}"
+
+        candidate = f"ot3@{base}"
+        if candidate not in branch_tags:
+            return candidate
+        next_version = semver.VersionInfo.parse(base).bump_patch()
+        return f"ot3@{next_version}"
+
+    release_version = version if version.startswith("v") else f"v{version}"
+    if stability == "unstable":
+        return next_alpha_tag(f"{release_version}-alpha.", branch_tags)
+
+    matching = [tag for tag in branch_tags if tag.startswith(release_version)]
+    if release_version not in matching:
+        return release_version
+    raise ValueError(f"Tag {release_version} already exists on {branch}")
 
 
 def max_ot3_firmware_tag_number(state: RepoState, branch: str, release_type: str) -> int:
@@ -454,6 +519,26 @@ def get_next_ot3_firmware_tag_command(
     return f"internal@v{next_num}"
 
 
+def flex_internal_alpha_from_opentrons(
+    results: Dict[str, RepoState],
+    version: str,
+    stability: str,
+) -> Optional[int]:
+    """Return the coordinated internal alpha number derived from opentrons ot3@ tags."""
+    if stability != "unstable":
+        return None
+
+    app_repo = repo_by_name("opentrons")
+    app_state = results.get(app_repo.name)
+    if app_state is None:
+        return None
+
+    branch = release_branch_for_repo(app_state, app_repo, version)
+    base = flex_release_semver_base(version)
+    branch_tags = tags_merged_on_branch(app_state, branch)
+    return next_alpha_number(f"ot3@{base}-alpha.", branch_tags)
+
+
 def get_next_stack_repo_tag(
     repo: RepoSpec,
     state: RepoState,
@@ -462,6 +547,7 @@ def get_next_stack_repo_tag(
     release_type: str,
     stability: str,
     release_path: ReleasePath,
+    results: Optional[Dict[str, RepoState]] = None,
 ) -> str:
     """Suggest the next tag for a stack repo that is not the app monorepo."""
     if repo.name == "buildroot":
@@ -474,7 +560,23 @@ def get_next_stack_repo_tag(
             "alpha" if stability == "alpha" else "beta" if stability == "beta" else "stable",
         )
     if repo.name == "oe-core":
-        return get_next_oe_core_tag_command(state, branch, release_type, stability)
+        internal_base: Optional[str] = None
+        internal_alpha: Optional[int] = None
+        if release_type == "internal" and release_path.name == "flex":
+            internal_base = flex_release_semver_base(version)
+            internal_alpha = (
+                flex_internal_alpha_from_opentrons(results, version, stability)
+                if results is not None
+                else None
+            )
+        return get_next_oe_core_tag_command(
+            state,
+            branch,
+            release_type,
+            stability,
+            internal_base,
+            internal_alpha,
+        )
     if repo.name == "ot3-firmware":
         return get_next_ot3_firmware_tag_command(state, branch, release_type)
     raise ValueError(f"No tag suggestion logic for {repo.name}")
@@ -487,6 +589,7 @@ def get_stack_repo_tag_plan(
     release_type: str,
     stability: str,
     release_path: ReleasePath,
+    results: Optional[Dict[str, RepoState]] = None,
 ) -> TagPlan:
     """Decide whether a stack repo needs a tag and what it should be."""
     branch = release_branch_for_repo(state, repo, version)
@@ -502,7 +605,9 @@ def get_stack_repo_tag_plan(
             reason=f"{branch} matches {latest_tag}",
         )
 
-    next_tag = get_next_stack_repo_tag(repo, state, branch, version, release_type, stability, release_path)
+    next_tag = get_next_stack_repo_tag(
+        repo, state, branch, version, release_type, stability, release_path, results
+    )
     reason = f"commits on {branch} since {latest_tag or 'no prior channel tag'}"
     return TagPlan(
         needs_tag=True,
@@ -567,6 +672,9 @@ def get_next_tag_command(
             branch,
             ot2_stability,
         )
+
+    if release_path is not None and release_path.name == "flex":
+        return get_next_flex_app_tag_command(state, branch, release_type, stability, version)
 
     branch_tags = tags_merged_on_branch(state, branch)
     if stability == "unstable":
@@ -914,7 +1022,7 @@ def print_stack_repo_tag_section(
         console.print(f"[red]Missing sync state for {repo.name}[/]")
         return
 
-    plan = get_stack_repo_tag_plan(repo, state, version, release_type, stability, release_path)
+    plan = get_stack_repo_tag_plan(repo, state, version, release_type, stability, release_path, results)
     print_tag_plan(repo, plan)
 
 
