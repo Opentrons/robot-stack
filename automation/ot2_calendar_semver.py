@@ -15,20 +15,12 @@ OT2_RELEASE_TZ = ZoneInfo("America/New_York")
 OT2_MONTH = r"(?:[1-9]|1[0-2])"
 OT2_MONTH_CAP = r"([1-9]|1[0-2])"
 
-OT2_INTERNAL_VERSION_RE = re.compile(
-    rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.(\d+)(?:-(alpha|beta))?$"
-)
-OT2_INTERNAL_TAG_RE = re.compile(
-    rf"^internal@((\d{{2}})\.{OT2_MONTH_CAP}\.(\d+)(?:-(alpha|beta))?)$"
-)
+OT2_INTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.(\d+)(?:-(alpha|beta))?$")
+OT2_INTERNAL_TAG_RE = re.compile(rf"^internal@((\d{{2}})\.{OT2_MONTH_CAP}\.(\d+)(?:-(alpha|beta))?)$")
 
 OT2_EXTERNAL_PRERELEASE_NUM = r"\d{1,3}"
-OT2_EXTERNAL_VERSION_RE = re.compile(
-    rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.([0-9])(?:-(alpha|beta)\.({OT2_EXTERNAL_PRERELEASE_NUM}))?$"
-)
-OT2_EXTERNAL_TAG_RE = re.compile(
-    rf"^v((\d{{2}})\.{OT2_MONTH_CAP}\.([0-9])(?:-(alpha|beta)\.({OT2_EXTERNAL_PRERELEASE_NUM}))?)$"
-)
+OT2_EXTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.([0-9])(?:-(alpha|beta)\.({OT2_EXTERNAL_PRERELEASE_NUM}))?$")
+OT2_EXTERNAL_TAG_RE = re.compile(rf"^v((\d{{2}})\.{OT2_MONTH_CAP}\.([0-9])(?:-(alpha|beta)\.({OT2_EXTERNAL_PRERELEASE_NUM}))?)$")
 
 Ot2Stability = Literal["stable", "alpha", "beta"]
 
@@ -118,9 +110,7 @@ def ot2_internal_version_for_date(release_date: date | None = None, build_num: i
     """Return internal semver for a calendar date (Eastern by default)."""
     if release_date is None:
         release_date = ot2_release_date_today()
-    return encode_ot2_internal_version(
-        release_date.year, release_date.month, release_date.day, build_num
-    )
+    return encode_ot2_internal_version(release_date.year, release_date.month, release_date.day, build_num)
 
 
 def ot2_external_version_for_month(release_date: date | None = None, release_num: int = 0) -> str:

@@ -42,17 +42,11 @@ def allocate_next_internal_tag(
             year, month, day, build_num, prerelease = decode_ot2_internal_version(version)
         except ValueError:
             continue
-        if (
-            (year, month, day)
-            == (release_date.year, release_date.month, release_date.day)
-            and prerelease == expected_prerelease
-        ):
+        if (year, month, day) == (release_date.year, release_date.month, release_date.day) and prerelease == expected_prerelease:
             same_day_builds.append(build_num)
 
     next_build = max(same_day_builds, default=0) + 1
-    next_version = encode_ot2_internal_version(
-        release_date.year, release_date.month, release_date.day, next_build
-    )
+    next_version = encode_ot2_internal_version(release_date.year, release_date.month, release_date.day, next_build)
     if expected_prerelease is not None:
         next_version = f"{next_version}-{expected_prerelease}"
     return f"internal@{next_version}"
@@ -78,10 +72,7 @@ def allocate_next_external_tag(
                 year, month, release_num, prerelease, _ = decode_ot2_external_version(version)
             except ValueError:
                 continue
-            if (
-                (year, month) == (release_date.year, release_date.month)
-                and prerelease is None
-            ):
+            if (year, month) == (release_date.year, release_date.month) and prerelease is None:
                 same_month_nums.append(release_num)
         next_num = max(same_month_nums, default=-1) + 1
         if next_num > 9:
@@ -105,15 +96,9 @@ def allocate_next_external_tag(
             tag_year, tag_month, tag_num, tag_pre, tag_pre_num = decode_ot2_external_version(version)
         except ValueError:
             continue
-        if (
-            (tag_year, tag_month, tag_num) == (year, month, release_num)
-            and tag_pre == stability
-            and tag_pre_num is not None
-        ):
+        if (tag_year, tag_month, tag_num) == (year, month, release_num) and tag_pre == stability and tag_pre_num is not None:
             same_prerelease_nums.append(tag_pre_num)
 
     next_pre_num = max(same_prerelease_nums, default=-1) + 1
-    next_version = encode_ot2_external_version(
-        year, month, release_num, stability, next_pre_num
-    )
+    next_version = encode_ot2_external_version(year, month, release_num, stability, next_pre_num)
     return f"v{next_version}"

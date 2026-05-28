@@ -164,10 +164,7 @@ def build_invalidation_plan(
 def format_create_invalidation_command(plan: CloudFrontInvalidationPlan, distribution_id: str) -> str:
     """Return a copy-paste aws cloudfront create-invalidation command."""
     path_args = " ".join(f'"{path}"' for path in plan.paths)
-    return (
-        f"aws cloudfront create-invalidation --profile {plan.profile} "
-        f"--distribution-id {distribution_id} --paths {path_args}"
-    )
+    return f"aws cloudfront create-invalidation --profile {plan.profile} --distribution-id {distribution_id} --paths {path_args}"
 
 
 def print_copy_paste_command(command: str) -> None:
@@ -198,8 +195,7 @@ def format_cloudfront_invalidation_report(plan: CloudFrontInvalidationPlan) -> s
         )
         if target.terraform_output is not None:
             lines.append(f"# release-ci prod terraform output alternative: terraform output -raw {target.terraform_output}")
-        placeholder_id = f"<distribution-id-for-{target.host}>"
-        lines.append(f"# aws command printed below (single line)")
+        lines.append("# aws command printed below (single line)")
         return "\n".join(lines)
 
     lines.extend(
