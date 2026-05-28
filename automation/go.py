@@ -6,10 +6,9 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple, cast
-from zoneinfo import ZoneInfo
+from typing import Dict, List, Optional, Tuple, cast
 
 import semver
 from rich.console import Console
@@ -18,6 +17,15 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
+
+from automation.ot2_calendar_semver import (
+    Ot2Stability,
+    decode_ot2_external_version,
+    decode_ot2_internal_version,
+    ot2_external_version_for_month,
+    ot2_internal_version_for_date,
+)
+from automation.ot2_tag_allocation import allocate_next_external_tag, allocate_next_internal_tag
 
 console = Console(log_time=False)
 
@@ -62,128 +70,11 @@ class TagPlan:
     reason: str
 
 
-# ------------------------------------------------------------------------------
-# OT-2 calendar semver (internal and external use different patch schemes)
-# ------------------------------------------------------------------------------
-
 
 OT3_FIRMWARE_EXTERNAL_TAG_RE = re.compile(r"^v(\d+)$")
 OT3_FIRMWARE_INTERNAL_TAG_RE = re.compile(r"^internal@v(\d+)$")
-OT2_RELEASE_TZ = ZoneInfo("America/New_York")
-OT2_MONTH_CAP = r"([1-9]|1[0-2])"
-OT2_INTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.(\d+)(?:-(alpha|beta))?$")
-OT2_EXTERNAL_VERSION_RE = re.compile(rf"^(\d{{2}})\.{OT2_MONTH_CAP}\.([0-9])(?:-(alpha|beta)\.(\d+))?$")
 OT2_STABILITIES = ("stable", "alpha", "beta")
 FLEX_STABILITIES = ("stable", "unstable")
-Ot2Stability = Literal["stable", "alpha", "beta"]
-
-
-def ot2_release_date_today() -> date:
-    """Return today's calendar date in US Eastern, used for OT-2 version components."""
-    return datetime.now(OT2_RELEASE_TZ).date()
-
-
-def encode_ot2_internal_version(year: int, month: int, day: int, build_num: int = 1) -> str:
-    """Encode internal semver: YY.M.DNN where DNN = day * 100 + same-day build number."""
-    if build_num < 1 or build_num > 99:
-        raise ValueError("build_num must be between 1 and 99")
-    if day < 1 or day > 31:
-        raise ValueError("day must be between 1 and 31")
-
-    yy = year % 100
-    patch = day * 100 + build_num
-    return f"{yy}.{month}.{patch}"
-
-
-def decode_ot2_internal_version(version: str) -> Tuple[int, int, int, int, Optional[str]]:
-    """Decode internal semver into (year, month, day, build_num, prerelease)."""
-    clean = version.lstrip("v")
-    match = OT2_INTERNAL_VERSION_RE.match(clean)
-    if match is None:
-        raise ValueError(f"Invalid OT-2 internal version: {version}")
-
-    yy = int(match.group(1))
-    month = int(match.group(2))
-    patch = int(match.group(3))
-    prerelease = match.group(4)
-    year = 2000 + yy
-
-    if 100 <= patch <= 999:
-        day = patch // 100
-        build_num = patch % 100
-        if 1 <= day <= 9 and build_num >= 1:
-            return year, month, day, build_num, prerelease
-
-    if 1000 <= patch <= 3199:
-        day = patch // 100
-        build_num = patch % 100
-        if 10 <= day <= 31 and build_num >= 1:
-            return year, month, day, build_num, prerelease
-
-    raise ValueError(f"Invalid OT-2 internal version patch component: {version}")
-
-
-def encode_ot2_external_version(
-    year: int,
-    month: int,
-    release_num: int = 0,
-    prerelease: Optional[str] = None,
-    prerelease_num: Optional[int] = None,
-) -> str:
-    """Encode external semver: YY.M.N with optional -alpha.N or -beta.N."""
-    if release_num < 0 or release_num > 9:
-        raise ValueError("release_num must be between 0 and 9")
-    yy = year % 100
-    version = f"{yy}.{month}.{release_num}"
-    if prerelease is not None:
-        if prerelease_num is None:
-            raise ValueError("prerelease_num required when prerelease is set")
-        version = f"{version}-{prerelease}.{prerelease_num}"
-    return version
-
-
-def decode_ot2_external_version(
-    version: str,
-) -> Tuple[int, int, int, Optional[str], Optional[int]]:
-    """Decode external semver into (year, month, release_num, prerelease, prerelease_num)."""
-    clean = version.lstrip("v")
-    match = OT2_EXTERNAL_VERSION_RE.match(clean)
-    if match is None:
-        raise ValueError(f"Invalid OT-2 external version: {version}")
-
-    yy = int(match.group(1))
-    month = int(match.group(2))
-    release_num = int(match.group(3))
-    prerelease = match.group(4)
-    prerelease_num = int(match.group(5)) if match.group(5) is not None else None
-    return 2000 + yy, month, release_num, prerelease, prerelease_num
-
-
-def ot2_internal_version_for_date(release_date: date | None = None, build_num: int = 1) -> str:
-    """Return internal semver for a calendar date (Eastern by default)."""
-    if release_date is None:
-        release_date = ot2_release_date_today()
-    return encode_ot2_internal_version(release_date.year, release_date.month, release_date.day, build_num)
-
-
-def ot2_external_version_for_month(release_date: date | None = None, release_num: int = 0) -> str:
-    """Return external semver for the calendar month (Eastern), N starting at 0."""
-    if release_date is None:
-        release_date = ot2_release_date_today()
-    return encode_ot2_external_version(release_date.year, release_date.month, release_num)
-
-
-def ot2_prerelease_for_stability(stability: str) -> Optional[str]:
-    """Map OT-2 internal stability choice to a bare semver prerelease suffix, if any."""
-    if stability == "stable":
-        return None
-    return stability
-
-
-# Backward-compatible aliases
-encode_ot2_version = encode_ot2_internal_version
-decode_ot2_version = decode_ot2_internal_version
-ot2_version_for_date = ot2_internal_version_for_date
 
 
 def strip_tag_version(tag: str) -> str:
@@ -273,63 +164,28 @@ def get_next_ot2_tag_command(
     stability: Ot2Stability = "stable",
 ) -> str:
     """Return the next OT-2 semver tag for the selected release channel and stability."""
-    tag_prefix = "v" if release_type == "external" else "internal@"
+    existing_tags: set[str] = set()
+    for pat_tags in state.branch_tags.get(branch, {}).values():
+        existing_tags.update(pat_tags)
 
     if release_type == "external":
-        year, month, release_num, _, _ = decode_ot2_external_version(version)
+        year, month, _, _, _ = decode_ot2_external_version(version)
+        release_date = date(year, month, 1)
         if stability == "stable":
-            same_month_nums: List[int] = []
-            for pat_tags in state.branch_tags.get(branch, {}).values():
-                for tag in pat_tags:
-                    try:
-                        clean = strip_tag_version(tag)
-                        tag_year, tag_month, tag_n, tag_pre, _ = decode_ot2_external_version(clean)
-                    except ValueError:
-                        continue
-                    if (tag_year, tag_month) == (year, month) and tag_pre is None:
-                        same_month_nums.append(tag_n)
-            next_num = max(same_month_nums, default=-1) + 1
-            if next_num > 9:
-                raise ValueError("More than 10 external stable releases this month (N > 9)")
-            next_version = encode_ot2_external_version(year, month, next_num)
-        else:
-            same_pre_nums: List[int] = []
-            for pat_tags in state.branch_tags.get(branch, {}).values():
-                for tag in pat_tags:
-                    try:
-                        clean = strip_tag_version(tag)
-                        tag_year, tag_month, tag_n, tag_pre, tag_pre_num = decode_ot2_external_version(clean)
-                    except ValueError:
-                        continue
-                    if (
-                        (tag_year, tag_month, tag_n) == (year, month, release_num)
-                        and tag_pre == stability
-                        and tag_pre_num is not None
-                    ):
-                        same_pre_nums.append(tag_pre_num)
-            next_pre_num = max(same_pre_nums, default=-1) + 1
-            next_version = encode_ot2_external_version(year, month, release_num, stability, next_pre_num)
-    else:
-        year, month, day, _, _ = decode_ot2_internal_version(version)
-        expected_prerelease = ot2_prerelease_for_stability(stability)
+            return allocate_next_external_tag(existing_tags, "stable", release_date=release_date)
+        return allocate_next_external_tag(
+            existing_tags,
+            stability,
+            base_version=version,
+            release_date=release_date,
+        )
 
-        same_day_builds: List[int] = []
-        for pat_tags in state.branch_tags.get(branch, {}).values():
-            for tag in pat_tags:
-                try:
-                    tag_year, tag_month, tag_day, tag_build, tag_prerelease = decode_ot2_internal_version(strip_tag_version(tag))
-                except ValueError:
-                    continue
-                if (tag_year, tag_month, tag_day) == (year, month, day) and tag_prerelease == expected_prerelease:
-                    same_day_builds.append(tag_build)
-
-        next_build = max(same_day_builds, default=0) + 1
-        next_version = encode_ot2_internal_version(year, month, day, next_build)
-        if expected_prerelease is not None:
-            next_version = f"{next_version}-{expected_prerelease}"
-
-    next_tag = f"{tag_prefix}{next_version}"
-    return next_tag
+    year, month, day, _, _ = decode_ot2_internal_version(version)
+    return allocate_next_internal_tag(
+        existing_tags,
+        stability,
+        release_date=date(year, month, day),
+    )
 
 
 def format_tag_commands(next_tag: str, release_version: str) -> Tuple[str, str, str]:
