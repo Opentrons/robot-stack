@@ -399,28 +399,30 @@ def render_ot2_external() -> str:
     app_json = app_manifest_url(OT2_EXTERNAL)
     robot_json = robot_manifest_url(OT2_EXTERNAL, OT2_ROBOT_PREFIX)
     body = f"""
-    <p class="lede">Customer-facing OT-2 releases. App and robot OS share the <strong>same version string</strong>
-    across <a href="https://github.com/Opentrons/opentrons-ot2">opentrons-ot2</a> and
+    <p class="lede">Customer-facing OT-2 releases. The app uses calendar semver
+    (<code>vYY.M.N</code>) in
+    <a href="https://github.com/Opentrons/opentrons-ot2">opentrons-ot2</a>.
+    Robot OS uses an independent traditional semver line (for example <code>v1.19.9</code>) in
     <a href="https://github.com/Opentrons/buildroot">buildroot</a>.</p>
 
-    <h2>Calendar semver (external)</h2>
+    <h2>Calendar semver (external app)</h2>
     <p>Versions use US Eastern calendar components:</p>
     <table>
       <thead><tr><th>Part</th><th>Meaning</th><th>Example</th></tr></thead>
       <tbody>
         <tr><td>YY</td><td>Two-digit year</td><td><code>26</code> for 2026</td></tr>
         <tr><td>M</td><td>Month, no leading zero</td><td><code>6</code> for June</td></tr>
-        <tr><td>N</td><td>Monthly stable counter, 0–9</td><td><code>0</code> = first stable that month</td></tr>
+        <tr><td>N</td><td>Monthly build counter, 0–9</td><td><code>0</code> = first external build that month</td></tr>
       </tbody>
     </table>
-    <p>External tags use a <code>v</code> prefix: <code>v26.6.0</code>, <code>v26.6.1</code>, …</p>
+    <p>External app tags use a <code>v</code> prefix: <code>v26.6.0</code>, <code>v26.6.1</code>, …</p>
 
     <h2>Stack repos</h2>
     <table>
       <thead><tr><th>Repo</th><th>Role</th><th>Tag pattern</th></tr></thead>
       <tbody>
         <tr><td><code>opentrons-ot2</code></td><td>App (taggable)</td><td><code>vYY.M.N</code> (+ alpha/beta prereleases)</td></tr>
-        <tr><td><code>buildroot</code></td><td>OT-2 robot OS</td><td>Same version string as app</td></tr>
+        <tr><td><code>buildroot</code></td><td>OT-2 robot OS</td><td><code>vX.Y.Z</code> independent line (for example <code>v1.19.9</code>)</td></tr>
       </tbody>
     </table>
 
@@ -431,15 +433,20 @@ def render_ot2_external() -> str:
     {_tag_need_section()}
 
     <h2>How the next tag is chosen</h2>
-    <p><code>go</code> prompts for a base calendar version (defaults to the current month in Eastern time).</p>
-    <h3>Stable</h3>
-    <p>Find stable external tags (<code>vYY.M.N</code> with no prerelease) for the same year and month.
-    Increment <code>N</code>. More than 10 stable releases in one month (<code>N &gt; 9</code>) is treated as an error.</p>
-    <h3>Alpha / beta</h3>
-    <p>Prereleases stay on a fixed <code>YY.M.N</code> base. Increment the prerelease number:
-    <code>v26.6.0-alpha.0</code>, <code>v26.6.0-alpha.1</code>, or <code>v26.6.0-beta.0</code>, etc.</p>
-    <p><code>buildroot</code> uses the same next-tag logic and should receive the matching tag when its
-    branch has commits since the latest channel tag.</p>
+    <p><code>go</code> infers the next calendar base from existing app tags on the release branch
+    (defaults to the current month in Eastern time when no tags exist yet).</p>
+    <h3>App stable</h3>
+    <p>Find all external calendar tags (<code>vYY.M.N</code>, including alpha/beta) for the same year and month.
+    Increment <code>N</code>. More than 10 external releases in one month (<code>N &gt; 9</code>) is treated as an error.</p>
+    <h3>App alpha / beta</h3>
+    <p>Each new build in the month gets the next <code>N</code> slot. Prerelease numbers increment on that base:
+    <code>v26.5.0</code> (stable) then <code>v26.5.1-alpha.0</code>, <code>v26.5.1-alpha.1</code>, or
+    <code>v26.5.2-beta.0</code>, etc.</p>
+    <h3>buildroot stable</h3>
+    <p>Patch-bump from the latest merged traditional <code>v*</code> tag on
+    <code>opentrons-develop</code> (for example <code>v1.19.9</code> → <code>v1.19.10</code>).
+    Calendar app tags such as <code>v26.6.0</code> are ignored when choosing the next buildroot tag.</p>
+    <p><code>buildroot</code> only receives a new tag when its branch is ahead of the latest traditional external tag.</p>
 
     {_tag_push_order_section("ot2")}
 
@@ -471,13 +478,14 @@ def render_ot2_external() -> str:
       <table>
         <thead><tr><th>Stability</th><th>Tag example</th><th>Notes</th></tr></thead>
         <tbody>
-          <tr><td>Stable</td><td><code>v26.6.0</code>, <code>v26.6.1</code></td><td>Monthly counter <code>N</code> bumps; app and buildroot match</td></tr>
-          <tr><td>Alpha</td><td><code>v26.6.0-alpha.0</code>, <code>v26.6.0-alpha.1</code></td><td>Fixed base; increment prerelease number</td></tr>
-          <tr><td>Beta</td><td><code>v26.6.0-beta.0</code></td><td>Same pattern as alpha with <code>-beta.N</code></td></tr>
+          <tr><td>Stable</td><td><code>v26.6.0</code>, <code>v26.6.2</code> (app)</td><td>Monthly counter <code>N</code> bumps for each external build; buildroot patch-bumps its own line (for example <code>v1.19.10</code>)</td></tr>
+          <tr><td>Alpha</td><td><code>v26.5.1-alpha.0</code>, <code>v26.5.1-alpha.1</code></td><td>Next <code>N</code> for a new build; increment prerelease on the same base</td></tr>
+          <tr><td>Beta</td><td><code>v26.5.2-beta.0</code></td><td>Same pattern as alpha with <code>-beta.N</code></td></tr>
         </tbody>
       </table>
-      <p>Alpha and beta do <em>not</em> advance the monthly stable counter <code>N</code>.
-      QA cycles reuse the same <code>YY.M.N</code> base until you ship a stable external release.</p>
+      <p>Alpha and beta share the monthly build counter <code>N</code> with stable releases.
+      After <code>v26.5.0</code> stable, the next alpha is <code>v26.5.1-alpha.0</code>, not
+      <code>v26.5.0-alpha.0</code>. QA cycles on the same base increment the prerelease number only.</p>
     </div>
     """
     return _wrap_page("ot2-external.html", "OT-2 external releases", body)
@@ -564,7 +572,7 @@ def render_ot2_internal() -> str:
         </tbody>
       </table>
       <p>Internal alpha/beta differs from external OT-2: external uses numbered prereleases
-      (<code>-alpha.0</code>, <code>-alpha.1</code>) on a fixed monthly base, while internal uses
+      (<code>-alpha.0</code>, <code>-alpha.1</code>) on the monthly build base for that release, while internal uses
       unnumbered <code>-alpha</code> / <code>-beta</code> suffixes combined with the
       day/build patch scheme.</p>
     </div>

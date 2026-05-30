@@ -22,7 +22,7 @@ The system supports internal and external release channels. This tool helps enfo
 | Path | Repos synced | App repo (tagging) | Version scheme |
 |---|---|---|---|
 | **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Per-repo prefixes (see Flex semver below) |
-| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver (see below) |
+| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver for app + internal; buildroot external uses independent `vX.Y.Z` (see below) |
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo, but is not included in release tables or tagging.
 
@@ -47,7 +47,7 @@ Isolation branches follow `chore_release-<version>` in each repo for **Flex exte
 
 ### OT-2 calendar semver
 
-OT-2 uses semver format for electron-updater. **Internal and external channels use different patch schemes.** Within a channel, app and robot share the same version.
+OT-2 uses semver format for electron-updater. **Internal and external channels use different patch schemes.** Internal app and robot OS share the same version string. External app uses calendar semver; external buildroot uses an independent traditional semver line (for example `v1.19.9`).
 
 Calendar components use **US Eastern** (`America/New_York`):
 
@@ -62,9 +62,11 @@ Examples (May 26, 2026):
 - `internal@26.5.2601-alpha` (first alpha internal)
 - `internal@26.5.2602-alpha` (second alpha internal same day)
 
-**External (`v`):** patch **N** is monthly release counter **0–9** (first release in June 2026 → `v26.6.0`). More than 10 stable externals per month is a process failure.
+**External app (`v` on opentrons-ot2):** patch **N** is monthly build counter **0–9** (first release in June 2026 → `v26.6.0`). Each external release in the month (stable, alpha, or beta) takes the next **N** slot. More than 10 external releases per month is a process failure.
 
-External alpha/beta use semver prerelease numbering on a fixed base: `v26.6.0-alpha.0`, `v26.6.0-alpha.1`, `v26.6.0-beta.0`.
+External app alpha/beta use semver prerelease numbering on that build's base: `v26.5.1-alpha.0`, `v26.5.1-alpha.1`, `v26.5.1-beta.0`. After `v26.5.0` stable, the next build is `v26.5.1-alpha.0`, not `v26.5.0-alpha.0`.
+
+**External robot OS (`v` on buildroot):** independent traditional semver line (for example `v1.19.9`). `go` patch-bumps from the latest merged traditional tag; it does not mirror the app calendar version.
 
 External tags use a `v` prefix; internal tags use `internal@`.
 
@@ -74,9 +76,9 @@ External tags use a `v` prefix; internal tags use `internal@`.
 |---|---|---|
 | **Flex internal** | Default branch HEAD (`opentrons`: `edge`, `oe-core` / `ot3-firmware`: `main`) | Highest `ot3@X.Y.Z` base merged into `edge` |
 | **Flex external** | `chore_release-<version>` when present, else default branch | Highest `chore_release-X.Y.Z` on `opentrons`, fallback latest `v*` tag base |
-| **OT-2 internal / external** | Default branch HEAD (`opentrons-ot2`: `edge`, `buildroot`: `opentrons-develop`) | Calendar semver helpers (`YY.M.DNN` internal, `YY.M.N` external) |
+| **OT-2 internal / external** | Default branch HEAD (`opentrons-ot2`: `edge`, `buildroot`: `opentrons-develop`) | Calendar semver for app + internal (`YY.M.DNN` internal, `YY.M.N` external app); buildroot external patch bump from latest traditional `v*` tag |
 
-Internal tags: `ot3@` (Flex app), `internal@` (Flex oe-core), `internal@vN` (Flex firmware). OT-2 app and robot share `internal@` / `v` calendar tags.
+Internal tags: `ot3@` (Flex app), `internal@` (Flex oe-core), `internal@vN` (Flex firmware). OT-2 app and buildroot share `internal@` calendar tags. OT-2 external app uses calendar `vYY.M.N`; buildroot external uses independent traditional `vX.Y.Z`.
 
 ### Flex semver tagging
 
@@ -93,6 +95,19 @@ Tag suggestion rules in `automation/go.py`:
 - **App (`opentrons`):** base `X.Y.Z` comes from the prompted release version. Stable: `ot3@X.Y.Z` if missing, else patch bump. Alpha: increment `ot3@X.Y.Z-alpha.N` from branch tags.
 - **Robot OS (`oe-core`, internal):** base `X.Y.Z` comes from the same prompted version (not from the newest oe-core tag alone). Alpha `N` is **coordinated with the app**: `go` reads the next `ot3@X.Y.Z-alpha.N` from `opentrons` and reuses that `N` for `internal@X.Y.Z-alpha.N`. Stable: `internal@X.Y.Z` if missing, else patch bump.
 - **Firmware (`ot3-firmware`):** next integer above the highest merged channel tag (`internal@vN` or `vN`).
+
+### OT-2 semver tagging
+
+| Repo | Internal | External |
+|---|---|---|
+| `opentrons-ot2` (app) | `internal@YY.M.DNN`, alpha/beta bare suffix | `vYY.M.N`, alpha/beta `-alpha.N` / `-beta.N` (next monthly build slot) |
+| `buildroot` (robot OS) | same calendar version as app | independent `vX.Y.Z` line; patch bump from latest merged traditional tag |
+
+Tag suggestion rules in `automation/go.py`:
+
+- **App (`opentrons-ot2`):** calendar semver from synced app tags. Stable external: next monthly **N** (counts all external builds in the month). Alpha/beta external: next **N** for a new build line, or increment prerelease on the current alpha/beta base. Internal: same-day build counter in patch.
+- **Robot OS (`buildroot`, internal):** same calendar allocation as the app.
+- **Robot OS (`buildroot`, external):** patch bump from the latest merged traditional `v*` tag (for example `v1.19.9` → `v1.19.10`). Ignores calendar app tags like `v26.5.0`.
 
 ### Tag push order
 

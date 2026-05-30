@@ -28,8 +28,13 @@ from automation.ot2_calendar_semver import (
     decode_ot2_internal_version,
     ot2_external_version_for_month,
     ot2_internal_version_for_date,
+    version_from_external_tag,
 )
-from automation.ot2_tag_allocation import allocate_next_external_tag, allocate_next_internal_tag
+from automation.ot2_tag_allocation import (
+    allocate_next_external_tag,
+    allocate_next_internal_tag,
+    infer_ot2_external_base_version,
+)
 
 console = Console(log_time=False)
 
@@ -266,6 +271,57 @@ def process_repo(
     return state
 
 
+BUILDROOT_TRADITIONAL_EXTERNAL_TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+(?:-(?:alpha|beta)\.\d+)?)$")
+
+
+def is_buildroot_traditional_external_tag(tag: str) -> bool:
+    """Return True for buildroot external tags outside the OT-2 calendar scheme."""
+    if version_from_external_tag(tag) is not None:
+        return False
+    return BUILDROOT_TRADITIONAL_EXTERNAL_TAG_RE.match(tag) is not None
+
+
+def buildroot_traditional_external_tags(state: RepoState, branch: str) -> List[str]:
+    """Return merged buildroot external tags on the traditional semver line."""
+    tags = state.branch_tags.get(branch, {}).get("v", [])
+    return [tag for tag in tags if is_buildroot_traditional_external_tag(tag)]
+
+
+def latest_buildroot_external_tag(state: RepoState, branch: str) -> Optional[str]:
+    """Return the newest merged traditional external tag on buildroot."""
+    traditional = buildroot_traditional_external_tags(state, branch)
+    return traditional[0] if traditional else None
+
+
+def get_next_buildroot_tag_command(
+    state: RepoState,
+    branch: str,
+    release_type: str,
+    version: str,
+    stability: Ot2Stability = "stable",
+) -> str:
+    """Suggest the next buildroot tag (calendar internal, traditional external)."""
+    existing_tags: set[str] = set()
+    for pat_tags in state.branch_tags.get(branch, {}).values():
+        existing_tags.update(pat_tags)
+
+    if release_type == "internal":
+        year, month, day, _, _ = decode_ot2_internal_version(version)
+        return allocate_next_internal_tag(
+            existing_tags,
+            stability,
+            release_date=date(year, month, day),
+        )
+
+    traditional_tags = buildroot_traditional_external_tags(state, branch)
+    if not traditional_tags:
+        raise ValueError("No traditional v* tags merged into branch")
+
+    latest = traditional_tags[0]
+    next_version = semver.VersionInfo.parse(strip_tag_version(latest)).bump_patch()
+    return f"v{next_version}"
+
+
 def get_next_ot2_tag_command(
     repo: RepoSpec,
     version: str,
@@ -274,7 +330,7 @@ def get_next_ot2_tag_command(
     branch: str,
     stability: Ot2Stability = "stable",
 ) -> str:
-    """Return the next OT-2 semver tag for the selected release channel and stability."""
+    """Return the next OT-2 app calendar semver tag for the selected channel and stability."""
     existing_tags: set[str] = set()
     for pat_tags in state.branch_tags.get(branch, {}).values():
         existing_tags.update(pat_tags)
@@ -284,12 +340,7 @@ def get_next_ot2_tag_command(
         release_date = date(year, month, 1)
         if stability == "stable":
             return allocate_next_external_tag(existing_tags, "stable", release_date=release_date)
-        return allocate_next_external_tag(
-            existing_tags,
-            stability,
-            base_version=version,
-            release_date=release_date,
-        )
+        return allocate_next_external_tag(existing_tags, stability, release_date=release_date)
 
     year, month, day, _, _ = decode_ot2_internal_version(version)
     return allocate_next_internal_tag(
@@ -537,14 +588,8 @@ def get_next_stack_repo_tag(
 ) -> str:
     """Suggest the next tag for a stack repo that is not the app monorepo."""
     if repo.name == "buildroot":
-        return get_next_ot2_tag_command(
-            repo,
-            version,
-            release_type,
-            state,
-            branch,
-            "alpha" if stability == "alpha" else "beta" if stability == "beta" else "stable",
-        )
+        ot2_stability: Ot2Stability = "alpha" if stability == "alpha" else "beta" if stability == "beta" else "stable"
+        return get_next_buildroot_tag_command(state, branch, release_type, version, ot2_stability)
     if repo.name == "oe-core":
         internal_base: Optional[str] = None
         internal_alpha: Optional[int] = None
@@ -579,7 +624,10 @@ def get_stack_repo_tag_plan(
 ) -> TagPlan:
     """Decide whether a stack repo needs a tag and what it should be."""
     branch = release_branch_for_repo(state, repo, version, release_path, release_type)
-    latest_tag = latest_channel_tag(state, repo, branch, release_type)
+    if repo.name == "buildroot" and release_type == "external":
+        latest_tag = latest_buildroot_external_tag(state, branch)
+    else:
+        latest_tag = latest_channel_tag(state, repo, branch, release_type)
     needs_tag = needs_new_tag(repo, branch, latest_tag)
 
     if not needs_tag:
@@ -1206,6 +1254,42 @@ def print_track_builds_command(release_path: ReleasePath, app_tag: str) -> None:
     )
 
 
+def ot2_external_tags_from_state(
+    results: Dict[str, RepoState],
+    release_path: ReleasePath,
+    release_type: str,
+    version: str,
+) -> set[str]:
+    """Collect calendar external tags on the app release branch."""
+    repo = repo_by_name(release_path.taggable_repo)
+    state = results.get(repo.name)
+    if state is None:
+        return set()
+
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
+    existing: set[str] = set()
+    for pat_tags in state.branch_tags.get(branch, {}).values():
+        existing.update(pat_tags)
+    return existing
+
+
+def resolve_ot2_external_version_from_state(
+    results: Dict[str, RepoState],
+    release_path: ReleasePath,
+    release_type: str,
+    version: str,
+    stability: Ot2Stability,
+) -> str:
+    """Infer the OT-2 external YY.M.N base from synced app tags."""
+    existing_tags = ot2_external_tags_from_state(results, release_path, release_type, version)
+    year, month, _, _, _ = decode_ot2_external_version(version)
+    return infer_ot2_external_base_version(
+        existing_tags,
+        stability,
+        release_date=date(year, month, 1),
+    )
+
+
 def run_release(
     release_path: ReleasePath,
     release_type: str,
@@ -1215,11 +1299,6 @@ def run_release(
     """Sync repos and print release tables, tag guidance, and follow-up commands."""
     active_repos = repos_for_path(release_path)
     sync_repos = repos_to_sync(release_path)
-
-    console.print(
-        f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
-        f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"
-    )
 
     results: Dict[str, RepoState] = {}
     with ThreadPoolExecutor() as executor:
@@ -1231,6 +1310,24 @@ def run_release(
                 console.log(f"[green]✅ {repo.name} synced[/]")
             except Exception as err:
                 console.log(f"[red]❌ {repo.name} failed: {err}[/]")
+
+    if release_path.name == "ot2" and release_type == "external":
+        try:
+            version = resolve_ot2_external_version_from_state(
+                results,
+                release_path,
+                release_type,
+                version,
+                cast(Ot2Stability, stability),
+            )
+        except ValueError as err:
+            console.print(f"[red]{err}[/]")
+            sys.exit(1)
+
+    console.print(
+        f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
+        f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"
+    )
 
     summary = Table(title=f"Latest Tags Summary ({release_path.label})", show_lines=True)
     summary.add_column("Repo", style="bold")

@@ -29,7 +29,7 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 | Path | Repos | App repo | Version scheme |
 |---|---|---|---|
 | **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Per-repo prefixes (`ot3@`, `internal@`, `v`; see below) |
-| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver (internal + external; see below) |
+| **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver for app + internal; buildroot external uses its own `vX.Y.Z` line |
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo. It is not included in release tables or tagging.
 
@@ -70,7 +70,7 @@ After builds finish, print a CloudFront invalidation command with `just invalida
 
 ## OT-2 calendar semver
 
-OT-2 uses semver-shaped versions so electron-updater and robot update checks work. **Internal and external channels use different patch schemes.** Within a channel, the app and robot OS share the same version string.
+OT-2 uses semver-shaped versions so electron-updater and robot update checks work. **Internal and external channels use different patch schemes.** Internal app and robot OS share the same version string. External app uses calendar semver; external buildroot uses an independent traditional semver line (for example `v1.19.9`).
 
 Calendar components use **US Eastern** (`America/New_York`):
 
@@ -93,22 +93,25 @@ Same-day follow-ups increment the build number in the patch (`2601` → `2602`).
 
 ### External (`v`)
 
-Patch **N** is the monthly release counter, **starting at 0**. At most 10 stable external releases per month (`N` = 0–9).
+**App (`opentrons-ot2`):** patch **N** is the monthly build counter, **starting at 0**. Each external release in the month (stable, alpha, or beta) gets the next **N** slot. At most 10 external releases per month (`N` = 0–9).
 
 | Example | Meaning |
 |---|---|
-| `v26.6.0` | First stable external release in June 2026 |
-| `v26.6.1` | Second stable external release that month |
-| `v26.6.0-alpha.0` | First external alpha on base `26.6.0` |
-| `v26.6.0-alpha.1` | Second external alpha on the same base |
+| `v26.6.0` | First external app release in June 2026 |
+| `v26.6.1-alpha.0` | Second external build that month (first alpha on base `26.6.1`) |
+| `v26.6.1-alpha.1` | Another alpha QA cycle on the same base |
+| `v26.6.2` | Third external build that month (stable) |
 
-External alpha and beta builds use standard semver prerelease numbering (`-alpha.0`, `-alpha.1`, `-beta.0`, …) on a fixed `YY.M.N` base instead of bumping the patch.
+External alpha and beta app builds use standard semver prerelease numbering (`-alpha.0`, `-alpha.1`, `-beta.0`, …) on the monthly **YY.M.N** base for that build. Prerelease numbers increment on a fixed base; starting a new build in the month bumps **N**.
+
+**Robot OS (`buildroot`):** external stable tags follow the repo's independent traditional semver line, for example `v1.19.9` → `v1.19.10`. They do not use the app calendar version.
 
 ### Summary
 
-| Channel | Stable | Alpha | Beta |
-|---|---|---|---|
-| External | `v26.6.0` | `v26.6.0-alpha.0` | `v26.6.0-beta.0` |
-| Internal | `internal@26.5.2601` | `internal@26.5.2601-alpha` | `internal@26.5.2601-beta` |
+| Channel | Repo | Stable | Alpha | Beta |
+|---|---|---|---|---|
+| External | `opentrons-ot2` | `v26.6.0` | `v26.6.1-alpha.0` | `v26.6.1-beta.0` |
+| External | `buildroot` | `v1.19.10` | patch bump on traditional line | patch bump on traditional line |
+| Internal | both | `internal@26.5.2601` | `internal@26.5.2601-alpha` | `internal@26.5.2601-beta` |
 
 Implementation lives in `automation/go.py` and `opentrons-ot2/scripts/ot2_calendar_semver.py`.

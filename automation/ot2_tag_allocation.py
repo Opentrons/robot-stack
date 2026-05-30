@@ -14,12 +14,75 @@ from automation.ot2_calendar_semver import (
     decode_ot2_internal_version,
     encode_ot2_external_version,
     encode_ot2_internal_version,
-    ot2_external_version_for_month,
     ot2_prerelease_for_stability,
     ot2_release_date_today,
     version_from_external_tag,
     version_from_internal_tag,
 )
+
+
+def _max_external_release_num_in_month(existing_tags: set[str], release_date: date) -> int:
+    """Return the highest monthly build counter N already used this calendar month."""
+    release_nums: list[int] = []
+    for tag in existing_tags:
+        version = version_from_external_tag(tag)
+        if version is None:
+            continue
+        try:
+            year, month, release_num, _, _ = decode_ot2_external_version(version)
+        except ValueError:
+            continue
+        if (year, month) == (release_date.year, release_date.month):
+            release_nums.append(release_num)
+    return max(release_nums, default=-1)
+
+
+def _external_stability_bases_in_month(
+    existing_tags: set[str],
+    release_date: date,
+    stability: Ot2Stability,
+) -> set[int]:
+    """Return N values that already have alpha or beta tags this month."""
+    bases: set[int] = set()
+    for tag in existing_tags:
+        version = version_from_external_tag(tag)
+        if version is None:
+            continue
+        try:
+            year, month, release_num, tag_pre, tag_pre_num = decode_ot2_external_version(version)
+        except ValueError:
+            continue
+        if (
+            (year, month) == (release_date.year, release_date.month)
+            and tag_pre == stability
+            and tag_pre_num is not None
+        ):
+            bases.add(release_num)
+    return bases
+
+
+def infer_ot2_external_base_version(
+    existing_tags: set[str],
+    stability: Ot2Stability = "stable",
+    release_date: date | None = None,
+) -> str:
+    """Return the YY.M.N base the next external tag will use."""
+    if release_date is None:
+        release_date = ot2_release_date_today()
+
+    max_n = _max_external_release_num_in_month(existing_tags, release_date)
+
+    if stability == "stable":
+        next_n = max_n + 1
+        if next_n > 9:
+            raise ValueError("More than 10 external releases this month (N > 9)")
+        return encode_ot2_external_version(release_date.year, release_date.month, next_n)
+
+    stability_bases = _external_stability_bases_in_month(existing_tags, release_date, stability)
+    base_n = max(stability_bases) if stability_bases else max_n + 1
+    if base_n > 9:
+        raise ValueError("More than 10 external releases this month (N > 9)")
+    return encode_ot2_external_version(release_date.year, release_date.month, base_n)
 
 
 def allocate_next_internal_tag(
@@ -55,7 +118,6 @@ def allocate_next_internal_tag(
 def allocate_next_external_tag(
     existing_tags: set[str],
     stability: Ot2Stability = "stable",
-    base_version: str | None = None,
     release_date: date | None = None,
 ) -> str:
     """Pick the next v tag for the calendar month and stability channel."""
@@ -63,29 +125,11 @@ def allocate_next_external_tag(
         release_date = ot2_release_date_today()
 
     if stability == "stable":
-        same_month_nums: list[int] = []
-        for tag in existing_tags:
-            version = version_from_external_tag(tag)
-            if version is None:
-                continue
-            try:
-                year, month, release_num, prerelease, _ = decode_ot2_external_version(version)
-            except ValueError:
-                continue
-            if (year, month) == (release_date.year, release_date.month) and prerelease is None:
-                same_month_nums.append(release_num)
-        next_num = max(same_month_nums, default=-1) + 1
-        if next_num > 9:
-            raise ValueError("More than 10 external stable releases this month (N > 9)")
-        next_version = encode_ot2_external_version(release_date.year, release_date.month, next_num)
+        next_version = infer_ot2_external_base_version(existing_tags, "stable", release_date)
         return f"v{next_version}"
 
-    if base_version is None:
-        base_version = ot2_external_version_for_month(release_date, 0)
-
+    base_version = infer_ot2_external_base_version(existing_tags, stability, release_date)
     year, month, release_num, _, _ = decode_ot2_external_version(base_version)
-    if (year, month) != (release_date.year, release_date.month):
-        raise ValueError("base_version month must match release month")
 
     same_prerelease_nums: list[int] = []
     for tag in existing_tags:

@@ -45,10 +45,27 @@ class TestAllocateNextExternalTag(unittest.TestCase):
         tag = allocate_next_external_tag(
             existing,
             "alpha",
-            base_version="26.6.0",
             release_date=date(2026, 6, 15),
         )
         self.assertEqual(tag, "v26.6.0-alpha.1")
+
+    def test_next_alpha_after_stable_uses_next_monthly_build(self) -> None:
+        existing = {"v26.5.0"}
+        tag = allocate_next_external_tag(
+            existing,
+            "alpha",
+            release_date=date(2026, 5, 30),
+        )
+        self.assertEqual(tag, "v26.5.1-alpha.0")
+
+    def test_next_stable_counts_prerelease_bases(self) -> None:
+        existing = {"v26.5.0", "v26.5.1-alpha.0"}
+        tag = allocate_next_external_tag(
+            existing,
+            "stable",
+            release_date=date(2026, 5, 30),
+        )
+        self.assertEqual(tag, "v26.5.2")
 
 
 if __name__ == "__main__":
