@@ -441,7 +441,7 @@ def render_ot2_external() -> str:
     <h3>App alpha / beta</h3>
     <p>Each new build in the month gets the next <code>N</code> slot. Prerelease numbers increment on that base:
     <code>v26.5.0</code> (stable) then <code>v26.5.1-alpha.0</code>, <code>v26.5.1-alpha.1</code>, or
-    <code>v26.5.2-beta.0</code>, etc.</p>
+    <code>v26.5.1-beta.0</code>, etc.</p>
     <h3>buildroot stable</h3>
     <p>Patch-bump from the latest merged traditional <code>v*</code> tag on
     <code>opentrons-develop</code> (for example <code>v1.19.9</code> → <code>v1.19.10</code>).
@@ -480,7 +480,7 @@ def render_ot2_external() -> str:
         <tbody>
           <tr><td>Stable</td><td><code>v26.6.0</code>, <code>v26.6.2</code> (app)</td><td>Monthly counter <code>N</code> bumps for each external build; buildroot patch-bumps its own line (for example <code>v1.19.10</code>)</td></tr>
           <tr><td>Alpha</td><td><code>v26.5.1-alpha.0</code>, <code>v26.5.1-alpha.1</code></td><td>Next <code>N</code> for a new build; increment prerelease on the same base</td></tr>
-          <tr><td>Beta</td><td><code>v26.5.2-beta.0</code></td><td>Same pattern as alpha with <code>-beta.N</code></td></tr>
+          <tr><td>Beta</td><td><code>v26.5.1-beta.0</code></td><td>Same monthly <code>N</code> as alpha on that build line; increment <code>-beta.N</code> on the same base</td></tr>
         </tbody>
       </table>
       <p>Alpha and beta share the monthly build counter <code>N</code> with stable releases.

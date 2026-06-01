@@ -79,7 +79,12 @@ def infer_ot2_external_base_version(
         return encode_ot2_external_version(release_date.year, release_date.month, next_n)
 
     stability_bases = _external_stability_bases_in_month(existing_tags, release_date, stability)
-    base_n = max(stability_bases) if stability_bases else max_n + 1
+    if stability == "beta" and not stability_bases:
+        # First beta on a build line shares N with the latest alpha base (e.g. 26.5.1-alpha.0 -> 26.5.1-beta.0).
+        alpha_bases = _external_stability_bases_in_month(existing_tags, release_date, "alpha")
+        base_n = max(alpha_bases) if alpha_bases else max_n + 1
+    else:
+        base_n = max(stability_bases) if stability_bases else max_n + 1
     if base_n > 9:
         raise ValueError("More than 10 external releases this month (N > 9)")
     return encode_ot2_external_version(release_date.year, release_date.month, base_n)
