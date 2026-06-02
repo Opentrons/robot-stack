@@ -9,15 +9,115 @@ from typing import Final, Tuple
 from automation.asset_urls import APP_CHANNEL_YAMLS, app_manifest_url, app_yaml_url, robot_manifest_url
 from automation.flex_urls import FLEX_EXTERNAL, FLEX_INTERNAL, FLEX_ROBOT_PREFIX
 from automation.ot2_urls import OT2_EXTERNAL, OT2_INTERNAL, OT2_ROBOT_PREFIX
-from automation.site_nav import GUIDE_NAV, render_site_header, site_nav_css
+from automation.site_nav import GUIDE_NAV, render_site_header, robot_name_html, site_nav_css
 
 GUIDE_PAGES: Final[Tuple[str, ...]] = tuple(item.filename for item in GUIDE_NAV)
 
 
+def _manifest_authority_note() -> str:
+    """Short note on which published manifests are authoritative."""
+    return """
+    <p class="note">
+      Robot <code>releases.json</code> is the source of truth for on-robot updates.
+      Desktop app updates use channel YAMLs (<code>latest.yml</code>, prerelease YAMLs) via
+      electron-updater; those YAMLs are authoritative.
+      App <code>releases.json</code> is parsed by a CloudFront edge function to pick the latest stable
+      semver from production and route <code>latest*</code> requests accordingly.
+    </p>
+    """
+
+
+def _tooling_model_section() -> str:
+    """Explain advisory robot-stack scripts (matches README and workspace rules)."""
+    return """
+    <h2>Robot-stack tooling</h2>
+    <p><code>just go</code>, <code>just track-builds</code>, and <code>just invalidate-cloudfront</code>
+    are <strong>advisory</strong>: they sync local clones under this workspace, print tables and analysis,
+    and emit copy-paste commands. A human (or agent) runs <code>git tag -a</code>, <code>git push</code>,
+    and <code>aws cloudfront create-invalidation</code> elsewhere. Nothing here pushes tags, triggers CI,
+    or invalidates CloudFront by itself.</p>
+    <p><code>robot-stack-infra</code> is always cloned for reference; it is not included in release
+    tagging tables.</p>
+    <p>Plan a release non-interactively, for example:</p>
+    <pre>just go --non-interactive --skip-assumptions --path flex --release-type external --stability stable</pre>
+    """
+
+
+def _default_branches_table(path: str) -> str:
+    """Render default branches for one robot path."""
+    if path == "flex":
+        rows = """
+        <tr><td><code>opentrons</code></td><td><code>edge</code></td></tr>
+        <tr><td><code>oe-core</code></td><td><code>main</code></td></tr>
+        <tr><td><code>ot3-firmware</code></td><td><code>main</code></td></tr>"""
+    else:
+        rows = """
+        <tr><td><code>opentrons-ot2</code></td><td><code>edge</code></td></tr>
+        <tr><td><code>buildroot</code></td><td><code>opentrons-develop</code></td></tr>"""
+    return f"""
+    <table>
+      <thead><tr><th>Repo</th><th>Default branch</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    """
+
+
+def _release_branch_section(path: str, channel: str) -> str:
+    """Describe which git branch go tags for this path and channel."""
+    branches = _default_branches_table(path)
+    if path == "flex" and channel == "external":
+        return f"""
+    <h2>Release branch</h2>
+    <p>Flex <strong>external</strong> prefers isolation branches
+    <code>chore_release-&lt;version&gt;</code> (for example <code>chore_release-9.1.0</code>, without a
+    <code>v</code> prefix in the branch name) when that branch exists on the remote after
+    <code>just go</code> syncs repos. Otherwise <code>go</code> uses each repo&apos;s default branch.</p>
+    {branches}
+    <p>Default version inference: highest <code>chore_release-X.Y.Z</code> on <code>opentrons</code>,
+    with fallback to the latest merged <code>v*</code> tag base.</p>
+    """
+    if path == "flex":
+        return f"""
+    <h2>Release branch</h2>
+    <p>Flex <strong>internal</strong> tags <strong>default-branch HEAD</strong>. No
+    <code>chore_release</code> branch is used.</p>
+    {branches}
+    <p>Default version inference: highest <code>ot3@X.Y.Z</code> base merged into <code>edge</code>.</p>
+    """
+    return f"""
+    <h2>Release branch</h2>
+    <p>OT-2 <strong>{html.escape(channel)}</strong> tags <strong>default-branch HEAD</strong>. No
+    <code>chore_release</code> branch is used.</p>
+    {branches}
+    """
+
+
+def _tag_need_section() -> str:
+    """Shared explanation of when go recommends a new tag (matches go.py)."""
+    return """
+    <h2>When does <code>just go</code> say a new tag is needed?</h2>
+    <p>For each repo, <code>automation/go.py</code> uses the <strong>release branch</strong> described
+    above, finds the newest <strong>annotated</strong> tag for the selected channel on that branch
+    (sorted by creator date, merged into the branch), and compares the branch tip commit.</p>
+    <div class="panel">
+      <p><strong>New tag needed</strong> when the branch tip commit is not the same commit as
+      that latest channel tag.</p>
+      <p><strong>No new tag needed</strong> when branch HEAD already matches the latest channel tag.</p>
+    </div>
+    <p>Tags must be annotated (<code>git tag -a … -m 'chore(release): …'</code>) so
+    <code>git tag -l --sort=-creatordate</code> reflects real release order. Stack repo tag messages
+    often reference the monorepo release version.</p>
+    <p>Pushing a tag triggers CI builds in the tagged repo. The app monorepo tag drives app
+    artifacts; stack repo tags drive robot OS and firmware builds.</p>
+    """
+
+
 def _page_css() -> str:
     """Return shared stylesheet for guide pages."""
+    # site_nav_css must come first so @import is not ignored (CSS requires @import at the top).
     return (
-        """
+        site_nav_css()
+        + """
     :root {
       color-scheme: light dark;
       --bg: #0f1419;
@@ -60,8 +160,8 @@ def _page_css() -> str:
     h3 { margin-top: 1.5rem; }
     p, li { color: var(--text); }
     .lede { color: var(--muted); font-size: 1.05rem; }
+    .note { color: var(--muted); font-size: 0.95rem; }
     """
-        + site_nav_css()
         + """
     table {
       width: 100%;
@@ -116,45 +216,30 @@ def _page_css() -> str:
     )
 
 
-def _wrap_page(filename: str, title: str, body: str) -> str:
+def _wrap_page(filename: str, title: str, body: str, *, robot_name: str = "") -> str:
     """Wrap guide body HTML in a full document."""
+    document_title = f"{robot_name} {title}" if robot_name else title
+    if robot_name:
+        heading = f"<h1>{robot_name_html(robot_name)} {html.escape(title)}</h1>"
+    else:
+        heading = f"<h1>{html.escape(title)}</h1>"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{html.escape(title)}</title>
+  <title>{html.escape(document_title)}</title>
   <style>{_page_css()}</style>
 </head>
 <body>
   {render_site_header(filename)}
   <main>
-    <h1>{html.escape(title)}</h1>
+    {heading}
     {body}
   </main>
 </body>
 </html>
 """
-
-
-def _tag_need_section() -> str:
-    """Shared explanation of when go recommends a new tag."""
-    return """
-    <h2>When does <code>just go</code> say a new tag is needed?</h2>
-    <p>For each repo, <code>automation/go.py</code> checks out
-    <code>chore_release-&lt;version&gt;</code> when that branch exists on the remote.
-    It finds the newest <strong>annotated</strong> tag on that branch for the selected channel
-    (sorted by creator date, merged into the branch).</p>
-    <div class="panel">
-      <p><strong>New tag needed</strong> when the branch tip commit is not the same commit as
-      that latest channel tag.</p>
-      <p><strong>No new tag needed</strong> when branch HEAD already matches the latest channel tag.</p>
-    </div>
-    <p>Tags must be annotated (<code>git tag -a … -m 'chore(release): …'</code>) so
-    <code>git tag -l --sort=-creatordate</code> reflects real release order.</p>
-    <p>Pushing a tag triggers CI builds in the tagged repo. The app monorepo tag drives app
-    artifacts; stack repo tags drive robot OS and firmware builds.</p>
-    """
 
 
 def _tag_push_order_section(robot: str) -> str:
@@ -188,22 +273,71 @@ def _track_builds_section(robot: str, example_tag: str, slack_robot_label: str) 
     path_flag = html.escape(robot)
     tag = html.escape(example_tag)
     slack_label = html.escape(slack_robot_label)
+    robot_repo = "buildroot" if robot == "ot2" else "oe-core"
     return f"""
     <h2>Track release builds</h2>
-    <p>After pushing the app tag, run:</p>
-    <pre>just track-builds --path {path_flag} --tag {tag} --wait</pre>
-    <p><code>automation/track_builds.py</code> locates GitHub Actions runs for the app workflow,
-    the cross-repo kickoff workflow, and the robot OS build in
-    <code>{"buildroot" if robot == "ot2" else "oe-core"}</code>.</p>
-    <p>The Rich output includes a full table (including key jobs). The Slack copy block is shorter:</p>
+    <p>After pushing the app tag, run (non-interactive form):</p>
+    <pre>just track-builds --non-interactive --path {path_flag} --tag {tag} --wait</pre>
+    <p><code>automation/track_builds.py</code> locates GitHub Actions runs for:</p>
+    <ol>
+      <li>App workflow on the monorepo (<code>App test, build, and deploy</code>)</li>
+      <li>Kickoff cross-repo dispatch (<code>{"Start OT-2 build" if robot == "ot2" else "Start Flex build"}</code>)</li>
+      <li>Robot OS build in <code>{robot_repo}</code></li>
+    </ol>
+    <p>The Rich table lists key jobs (deploy, desktop builds, dispatch spawn, robot image build).
+    The Slack copy block includes only two links:</p>
     <pre>{"OT-2" if robot == "ot2" else "Flex"} release `{tag}`
 
 - app: &lt;app workflow run URL&gt;
 - {slack_label}: &lt;robot OS workflow run URL&gt;</pre>
     <p><strong><code>--wait</code></strong> polls every 15 seconds until app, kickoff, and robot OS
-    workflow runs all appear (default timeout 15 minutes). It avoids calling the jobs API during
-    polling, then retries job lookups if GitHub briefly returns 404 for a new run.</p>
+    workflow runs all appear (default timeout 900 seconds). Polling checks workflow runs only; job
+    details are fetched afterward with retries for transient GitHub 404s. Exit code <code>2</code> if
+    a run is still missing after the timeout.</p>
     """
+
+
+def _invalidate_cloudfront_section(robot: str, example_tag: str) -> str:
+    """Explain just invalidate-cloudfront (manual step; CI does not invalidate)."""
+    path_flag = html.escape(robot)
+    tag = html.escape(example_tag)
+    robot_prefix = "ot2-br" if robot == "ot2" else "ot3-oe"
+    return f"""
+    <h2>CloudFront invalidation</h2>
+    <p>CI does <strong>not</strong> invalidate CloudFront automatically. After builds finish, print a
+    copy-paste command (it does not run invalidation):</p>
+    <pre>just invalidate-cloudfront --non-interactive --path {path_flag} --tag {tag}</pre>
+    <p>Invalidates <code>/app/*</code> and <code>/{robot_prefix}/*</code> on the channel host.
+    Uses AWS profile <code>robotics_robot_stack_prod-admin</code> when credentials allow distribution
+    lookup; otherwise the script prints a lookup command and placeholder ID.</p>
+    """
+
+
+def _validate_assets_section(path: str) -> str:
+    """Point to live asset inventory pages."""
+    if path == "flex":
+        external_page = "flex-external-assets.html"
+        internal_page = "flex-internal-assets.html"
+    else:
+        external_page = "ot2-external-assets.html"
+        internal_page = "ot2-internal-assets.html"
+    return f"""
+    <h2>Validate published artifacts</h2>
+    <p>Optionally regenerate live manifest inventories:</p>
+    <pre>just assets-pages</pre>
+    <p>Or per-platform reports: <code>just flex-assets</code> / <code>just ot2-assets</code>.
+    Pages: <a href="{html.escape(external_page)}">external assets</a>,
+    <a href="{html.escape(internal_page)}">internal assets</a>.</p>
+    """
+
+
+def _post_tag_workflow_sections(robot: str, example_tag: str, slack_robot_label: str) -> str:
+    """Track builds, CloudFront invalidation, and asset validation."""
+    return (
+        _track_builds_section(robot, example_tag, slack_robot_label)
+        + _invalidate_cloudfront_section(robot, example_tag)
+        + _validate_assets_section(robot)
+    )
 
 
 def _yaml_links(channel_host: str) -> str:
@@ -236,9 +370,9 @@ def render_flex_external() -> str:
       </tbody>
     </table>
 
-    <h2>Release branch</h2>
-    <p>During a cycle, isolation branches are named <code>chore_release-&lt;version&gt;</code>
-    (for example <code>chore_release-v9.1.0</code>) in each repo that participates in the release.</p>
+    {_tooling_model_section()}
+
+    {_release_branch_section("flex", "external")}
 
     {_tag_need_section()}
 
@@ -265,20 +399,21 @@ def render_flex_external() -> str:
 
     {_tag_push_order_section("flex")}
 
-    {_track_builds_section("flex", "v9.1.0", "flex")}
+    {_post_tag_workflow_sections("flex", "v9.1.0", "flex")}
 
     <h2>Where to find published releases</h2>
     <p>External Flex artifacts live on <code>{html.escape(FLEX_EXTERNAL.app_host)}</code>.</p>
     <table>
       <thead><tr><th>Artifact</th><th>URL</th></tr></thead>
       <tbody>
-        <tr><td>App manifest (informational)</td>
+        <tr><td>App <code>releases.json</code></td>
             <td><a href="{html.escape(app_json)}"><code>{html.escape(app_json)}</code></a></td></tr>
-        <tr><td>Flex robot OS manifest</td>
+        <tr><td>Robot <code>releases.json</code> (source of truth)</td>
             <td><a href="{html.escape(robot_json)}"><code>{html.escape(robot_json)}</code></a></td></tr>
       </tbody>
     </table>
-    <p>Electron-updater channel YAMLs (authoritative for app update prompts):</p>
+    {_manifest_authority_note()}
+    <p>Electron-updater channel YAMLs:</p>
     {_yaml_links(FLEX_EXTERNAL.app_host)}
     <p>See also the live inventory: <a href="flex-external-assets.html">Flex external assets</a>.</p>
 
@@ -301,7 +436,7 @@ def render_flex_external() -> str:
       external tag schemes above when their release branches move ahead of the latest channel tag.</p>
     </div>
     """
-    return _wrap_page("flex-external.html", "Flex external releases", body)
+    return _wrap_page("flex-external.html", "external releases", body, robot_name="Flex")
 
 
 def render_flex_internal() -> str:
@@ -323,12 +458,15 @@ def render_flex_internal() -> str:
       </tbody>
     </table>
 
-    <h2>Release branch</h2>
-    <p>Same isolation branch convention: <code>chore_release-&lt;version&gt;</code>.</p>
+    {_tooling_model_section()}
+
+    {_release_branch_section("flex", "internal")}
 
     {_tag_need_section()}
 
     <h2>How the next tag is chosen</h2>
+    <p>In <code>just go</code>, Flex uses <strong>Stability: stable</strong> or
+    <strong>unstable</strong> (<code>unstable</code> means alpha builds).</p>
     <h3>App (<code>opentrons</code>)</h3>
     <ul>
       <li><strong>Stable:</strong> <code>ot3@X.Y.Z</code> if not already on the branch; otherwise patch bump
@@ -356,19 +494,20 @@ def render_flex_internal() -> str:
 
     {_tag_push_order_section("flex")}
 
-    {_track_builds_section("flex", "ot3@8.5.0-alpha.0", "flex")}
+    {_post_tag_workflow_sections("flex", "ot3@8.5.0-alpha.0", "flex")}
 
     <h2>Where to find published releases</h2>
     <p>Internal Flex artifacts live on <code>{html.escape(FLEX_INTERNAL.app_host)}</code>.</p>
     <table>
       <thead><tr><th>Artifact</th><th>URL</th></tr></thead>
       <tbody>
-        <tr><td>App manifest (informational)</td>
+        <tr><td>App <code>releases.json</code></td>
             <td><a href="{html.escape(app_json)}"><code>{html.escape(app_json)}</code></a></td></tr>
-        <tr><td>Flex robot OS manifest</td>
+        <tr><td>Robot <code>releases.json</code> (source of truth)</td>
             <td><a href="{html.escape(robot_json)}"><code>{html.escape(robot_json)}</code></a></td></tr>
       </tbody>
     </table>
+    {_manifest_authority_note()}
     <p>Electron-updater YAMLs for internal app builds use the same filenames under the internal host:</p>
     {_yaml_links(FLEX_INTERNAL.app_host)}
     <p>See also: <a href="flex-internal-assets.html">Flex internal assets</a>.</p>
@@ -382,16 +521,14 @@ def render_flex_internal() -> str:
         <tbody>
           <tr><td>Stable internal</td><td><code>ot3@8.5.0</code></td><td><code>internal@8.5.0</code> (same prompted base)</td></tr>
           <tr><td>Alpha</td><td><code>ot3@8.5.0-alpha.0</code></td><td><code>internal@8.5.0-alpha.0</code> (same <code>N</code> as app)</td></tr>
-          <tr><td>Beta</td><td><code>ot3@8.5.0-beta.0</code> (manual)</td><td><code>internal@3.0.0-beta.0</code> (manual)</td></tr>
+          <tr><td>Beta</td><td colspan="2">Manual only; <code>go</code> suggests stable and alpha (<code>unstable</code>) today</td></tr>
         </tbody>
       </table>
       <p>Internal alpha uses the same <code>-alpha.N</code> increment rules as external, but with
-      the <code>ot3@</code> and <code>internal@</code> prefixes. Beta prereleases follow
-      <code>-beta.N</code> when you create them manually; <code>go</code> today focuses on stable
-      vs alpha for Flex.</p>
+      the <code>ot3@</code> and <code>internal@</code> prefixes.</p>
     </div>
     """
-    return _wrap_page("flex-internal.html", "Flex internal releases", body)
+    return _wrap_page("flex-internal.html", "internal releases", body, robot_name="Flex")
 
 
 def render_ot2_external() -> str:
@@ -426,13 +563,15 @@ def render_ot2_external() -> str:
       </tbody>
     </table>
 
-    <h2>Release branch</h2>
-    <p><code>chore_release-&lt;version&gt;</code> where version is the calendar base, e.g.
-    <code>chore_release-26.6.0</code> (no <code>v</code> prefix in the branch name).</p>
+    {_tooling_model_section()}
+
+    {_release_branch_section("ot2", "external")}
 
     {_tag_need_section()}
 
     <h2>How the next tag is chosen</h2>
+    <p>In <code>just go</code>, OT-2 uses <strong>Stability: stable</strong>, <strong>alpha</strong>,
+    or <strong>beta</strong>.</p>
     <p><code>go</code> infers the next calendar base from existing app tags on the release branch
     (defaults to the current month in Eastern time when no tags exist yet).</p>
     <h3>App stable</h3>
@@ -450,25 +589,22 @@ def render_ot2_external() -> str:
 
     {_tag_push_order_section("ot2")}
 
-    {_track_builds_section("ot2", "v26.6.0", "ot2")}
+    {_post_tag_workflow_sections("ot2", "v26.6.0", "ot2")}
 
     <h2>Where to find published releases</h2>
     <p>External OT-2 artifacts live on <code>{html.escape(OT2_EXTERNAL.app_host)}</code>.</p>
     <table>
       <thead><tr><th>Artifact</th><th>URL</th></tr></thead>
       <tbody>
-        <tr><td>App manifest</td>
+        <tr><td>App <code>releases.json</code></td>
             <td><a href="{html.escape(app_json)}"><code>{html.escape(app_json)}</code></a></td></tr>
-        <tr><td>OT-2 robot OS manifest</td>
+        <tr><td>Robot <code>releases.json</code> (source of truth)</td>
             <td><a href="{html.escape(robot_json)}"><code>{html.escape(robot_json)}</code></a></td></tr>
       </tbody>
     </table>
-    <p>App update YAMLs:</p>
-    <ul>
-      <li><a href="{html.escape(app_yaml_url(OT2_EXTERNAL, "alpha.yml"))}"><code>alpha.yml</code></a></li>
-      <li><a href="{html.escape(app_yaml_url(OT2_EXTERNAL, "beta.yml"))}"><code>beta.yml</code></a></li>
-      <li><a href="{html.escape(app_yaml_url(OT2_EXTERNAL, "latest.yml"))}"><code>latest.yml</code></a></li>
-    </ul>
+    {_manifest_authority_note()}
+    <p>Electron-updater channel YAMLs:</p>
+    {_yaml_links(OT2_EXTERNAL.app_host)}
     <p>See also: <a href="ot2-external-assets.html">OT-2 external assets</a>.</p>
 
     <div class="alpha-beta">
@@ -488,7 +624,7 @@ def render_ot2_external() -> str:
       <code>v26.5.0-alpha.0</code>. QA cycles on the same base increment the prerelease number only.</p>
     </div>
     """
-    return _wrap_page("ot2-external.html", "OT-2 external releases", body)
+    return _wrap_page("ot2-external.html", "external releases", body, robot_name="OT-2")
 
 
 def render_ot2_internal() -> str:
@@ -524,9 +660,9 @@ def render_ot2_internal() -> str:
       </tbody>
     </table>
 
-    <h2>Release branch</h2>
-    <p><code>chore_release-&lt;version&gt;</code> using the internal base version, e.g.
-    <code>chore_release-26.5.2601</code>.</p>
+    {_tooling_model_section()}
+
+    {_release_branch_section("ot2", "internal")}
 
     {_tag_need_section()}
 
@@ -544,19 +680,22 @@ def render_ot2_internal() -> str:
 
     {_tag_push_order_section("ot2")}
 
-    {_track_builds_section("ot2", "internal@26.5.2601", "ot2")}
+    {_post_tag_workflow_sections("ot2", "internal@26.5.2601", "ot2")}
 
     <h2>Where to find published releases</h2>
     <p>Internal OT-2 artifacts live on <code>{html.escape(OT2_INTERNAL.app_host)}</code>.</p>
     <table>
       <thead><tr><th>Artifact</th><th>URL</th></tr></thead>
       <tbody>
-        <tr><td>App manifest</td>
+        <tr><td>App <code>releases.json</code></td>
             <td><a href="{html.escape(app_json)}"><code>{html.escape(app_json)}</code></a></td></tr>
-        <tr><td>OT-2 robot OS manifest</td>
+        <tr><td>Robot <code>releases.json</code> (source of truth)</td>
             <td><a href="{html.escape(robot_json)}"><code>{html.escape(robot_json)}</code></a></td></tr>
       </tbody>
     </table>
+    {_manifest_authority_note()}
+    <p>Electron-updater YAMLs for internal app builds:</p>
+    {_yaml_links(OT2_INTERNAL.app_host)}
     <p>See also: <a href="ot2-internal-assets.html">OT-2 internal assets</a>.</p>
 
     <div class="alpha-beta">
@@ -577,7 +716,7 @@ def render_ot2_internal() -> str:
       day/build patch scheme.</p>
     </div>
     """
-    return _wrap_page("ot2-internal.html", "OT-2 internal releases", body)
+    return _wrap_page("ot2-internal.html", "internal releases", body, robot_name="OT-2")
 
 
 def publish_release_guides(output_dir: Path) -> None:

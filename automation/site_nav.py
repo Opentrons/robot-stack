@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Final, Tuple
 
 INDEX_PAGE: Final[str] = "index.html"
+FLEX_EXTERNAL_ASSETS_PAGE: Final[str] = "flex-external-assets.html"
 
 
 @dataclass(frozen=True)
@@ -17,24 +18,86 @@ class SiteLink:
     title: str
 
 
-ASSET_NAV: Final[Tuple[SiteLink, ...]] = (
-    SiteLink("flex-external-assets.html", "Flex external assets"),
-    SiteLink("flex-internal-assets.html", "Flex internal assets"),
-    SiteLink("ot2-external-assets.html", "OT-2 external assets"),
-    SiteLink("ot2-internal-assets.html", "OT-2 internal assets"),
+@dataclass(frozen=True)
+class ProductNavGroup:
+    """Asset and guide links for one robot product (Flex or OT-2)."""
+
+    label: str
+    external_assets: SiteLink
+    internal_assets: SiteLink
+    external_guide: SiteLink
+    internal_guide: SiteLink
+
+    @property
+    def asset_links(self) -> Tuple[SiteLink, ...]:
+        """Asset inventory pages for this product."""
+        return (self.external_assets, self.internal_assets)
+
+    @property
+    def guide_links(self) -> Tuple[SiteLink, ...]:
+        """Release guide pages for this product."""
+        return (self.external_guide, self.internal_guide)
+
+    @property
+    def all_links(self) -> Tuple[SiteLink, ...]:
+        """All pages in this product group."""
+        return self.asset_links + self.guide_links
+
+
+PRODUCT_NAV: Final[Tuple[ProductNavGroup, ...]] = (
+    ProductNavGroup(
+        "Flex",
+        SiteLink(INDEX_PAGE, "External assets"),
+        SiteLink("flex-internal-assets.html", "Internal assets"),
+        SiteLink("flex-external.html", "External guide"),
+        SiteLink("flex-internal.html", "Internal guide"),
+    ),
+    ProductNavGroup(
+        "OT-2",
+        SiteLink("ot2-external-assets.html", "External assets"),
+        SiteLink("ot2-internal-assets.html", "Internal assets"),
+        SiteLink("ot2-external.html", "External guide"),
+        SiteLink("ot2-internal.html", "Internal guide"),
+    ),
 )
 
-GUIDE_NAV: Final[Tuple[SiteLink, ...]] = (
-    SiteLink("flex-external.html", "Flex external guide"),
-    SiteLink("flex-internal.html", "Flex internal guide"),
-    SiteLink("ot2-external.html", "OT-2 external guide"),
-    SiteLink("ot2-internal.html", "OT-2 internal guide"),
-)
+ASSET_NAV: Final[Tuple[SiteLink, ...]] = tuple(link for group in PRODUCT_NAV for link in group.asset_links)
+
+GUIDE_NAV: Final[Tuple[SiteLink, ...]] = tuple(link for group in PRODUCT_NAV for link in group.guide_links)
+
+
+def robot_display_font_css() -> str:
+    """Orbitron styling for robot product names (nav, index, asset pages)."""
+    return """
+    @import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700&display=swap");
+    .robot-name,
+    header.site-header .robot-name,
+    .nav-group > .robot-name {
+      font-family: "Orbitron", "Eurostile", "Bank Gothic", "Arial Narrow", sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--text);
+    }
+    main h1 .robot-name {
+      font-size: 1.65rem;
+    }
+    li.robot-name.section-title {
+      font-size: 1.4rem;
+      line-height: 1.2;
+    }
+    """
+
+
+def robot_name_html(name: str) -> str:
+    """Return escaped robot product name wrapped for display font styling."""
+    return f'<span class="robot-name">{html.escape(name)}</span>'
 
 
 def site_nav_css() -> str:
     """Return shared stylesheet for the site header and navigation."""
-    return """
+    return (
+        robot_display_font_css()
+        + """
     header.site-header {
       border-bottom: 1px solid var(--border);
       background: var(--panel);
@@ -43,66 +106,137 @@ def site_nav_css() -> str:
       z-index: 10;
     }
     .site-header-inner {
-      max-width: 1200px;
+      max-width: 720px;
       margin: 0 auto;
-      padding: 0.85rem 1.25rem 1rem;
-    }
-    .site-brand {
-      font-size: 1rem;
-      font-weight: 700;
-      margin: 0 0 0.65rem;
-      letter-spacing: 0.01em;
-    }
-    .site-brand a {
-      color: var(--text);
-      text-decoration: none;
-    }
-    .site-brand a:hover { color: var(--accent); }
-    nav.site-nav {
+      padding: 0.65rem 1.25rem 0.85rem;
       display: flex;
-      flex-wrap: wrap;
-      gap: 0.35rem 0.85rem;
+      flex-direction: column;
       align-items: center;
+      text-align: center;
+    }
+    nav.site-nav {
       font-size: 0.92rem;
+      width: 100%;
+      display: flex;
+      justify-content: center;
     }
-    nav.site-nav .nav-label {
+    .nav-columns {
+      display: grid;
+      grid-template-columns: 10.5rem 10.5rem;
+      column-gap: 3rem;
+      justify-content: center;
+      margin: 0 auto;
+    }
+    .nav-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      align-items: center;
+      text-align: center;
+    }
+    .nav-group > .robot-name {
+      font-size: 1.5rem;
+      line-height: 1.2;
+      margin: 0 0 0.15rem;
+    }
+    .site-header-inner {
+      padding: 0.65rem 1.25rem 0.85rem;
+    }
+    .nav-block {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      align-items: center;
+      width: 100%;
+    }
+    .nav-block + .nav-block {
+      margin-top: 0.35rem;
+    }
+    .nav-kind {
       color: var(--muted);
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
-      margin-right: 0.15rem;
     }
-    nav.site-nav a {
+    .nav-block a {
+      display: block;
       color: var(--accent);
       text-decoration: none;
-      white-space: nowrap;
+      line-height: 1.35;
+      text-align: center;
     }
-    nav.site-nav a:hover { text-decoration: underline; }
-    nav.site-nav a[aria-current="page"] {
+    .nav-block a:hover { text-decoration: underline; }
+    .nav-block a.nav-current,
+    .nav-block a[aria-current="page"] {
       font-weight: 700;
       color: var(--text);
+      text-decoration: none;
+      cursor: default;
+    }
+    .nav-block a.nav-current:hover,
+    .nav-block a[aria-current="page"]:hover {
+      text-decoration: none;
+      color: var(--text);
+    }
+    @media (max-width: 520px) {
+      .nav-columns {
+        grid-template-columns: 1fr 1fr;
+        column-gap: 1.25rem;
+        width: 100%;
+        max-width: 20rem;
+      }
+      .nav-group > .robot-name {
+        font-size: 1.2rem;
+      }
     }
     """
+    )
+
+
+def nav_link_is_current(item: SiteLink, current_page: str) -> bool:
+    """Return True when this nav item matches the active page (including index alias)."""
+    if item.filename == current_page:
+        return True
+    return item.filename == INDEX_PAGE and current_page == FLEX_EXTERNAL_ASSETS_PAGE
+
+
+def _render_nav_link(item: SiteLink, current_page: str) -> str:
+    is_current = nav_link_is_current(item, current_page)
+    current_attr = ' aria-current="page"' if is_current else ""
+    current_class = ' class="nav-current"' if is_current else ""
+    return (
+        f'<a href="{html.escape(item.filename)}"{current_class}{current_attr}>'
+        f"{html.escape(item.title)}</a>"
+    )
+
+
+def _render_nav_block(kind: str, links: Tuple[SiteLink, ...], current_page: str) -> str:
+    """Render a vertical block of links under a section label."""
+    link_html = "".join(_render_nav_link(item, current_page) for item in links)
+    return (
+        f'<div class="nav-block">'
+        f'<span class="nav-kind">{html.escape(kind)}</span>{link_html}'
+        f"</div>"
+    )
 
 
 def render_site_header(current_page: str) -> str:
-    """Render the sticky site header with home, asset, and guide links."""
-    home_current = ' aria-current="page"' if current_page == INDEX_PAGE else ""
-    home = f'<a href="{INDEX_PAGE}"{home_current}>Home</a>'
+    """Render the sticky site header with Flex / OT-2 navigation on every page."""
+    groups: list[str] = []
+    for group in PRODUCT_NAV:
+        groups.append(
+            f'<div class="nav-group">'
+            f'{robot_name_html(group.label)}'
+            f'{_render_nav_block("Assets", group.asset_links, current_page)}'
+            f'{_render_nav_block("Guides", group.guide_links, current_page)}'
+            f"</div>"
+        )
 
-    def link_group(label: str, items: Tuple[SiteLink, ...]) -> str:
-        parts = [f'<span class="nav-label">{html.escape(label)}</span>']
-        for item in items:
-            current = ' aria-current="page"' if item.filename == current_page else ""
-            parts.append(f'<a href="{html.escape(item.filename)}"{current}>{html.escape(item.title)}</a>')
-        return "".join(parts)
+    columns = f'<div class="nav-columns">{"".join(groups)}</div>'
 
-    asset_links = link_group("Assets", ASSET_NAV)
-    guide_links = link_group("Guides", GUIDE_NAV)
     return (
         f'<header class="site-header"><div class="site-header-inner">'
-        f'<p class="site-brand"><a href="{INDEX_PAGE}">Opentrons release tooling</a></p>'
-        f'<nav class="site-nav" aria-label="Site">{home}{asset_links}{guide_links}</nav>'
+        f'<nav class="site-nav" aria-label="Site">{columns}</nav>'
         f"</div></header>"
     )

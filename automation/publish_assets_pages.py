@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import html
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -25,10 +23,10 @@ from automation.flex_urls import FLEX_EXTERNAL, FLEX_INTERNAL
 from automation.ot2_assets import OT2_CONFIG
 from automation.ot2_urls import OT2_EXTERNAL, OT2_INTERNAL
 from automation.release_guides import publish_release_guides
-from automation.site_nav import ASSET_NAV, GUIDE_NAV, INDEX_PAGE, render_site_header, site_nav_css
+from automation.site_nav import FLEX_EXTERNAL_ASSETS_PAGE, INDEX_PAGE
 
 DEFAULT_OUTPUT_DIR = Path("pages")
-DEFAULT_LIMIT = 15
+DEFAULT_LIMIT = 5
 DEFAULT_PORT = 8765
 
 
@@ -42,150 +40,53 @@ class ChannelAssetPage:
 
 
 CHANNEL_ASSET_PAGES: tuple[ChannelAssetPage, ...] = (
-    ChannelAssetPage("flex-external-assets.html", FLEX_CONFIG, FLEX_EXTERNAL),
+    ChannelAssetPage(FLEX_EXTERNAL_ASSETS_PAGE, FLEX_CONFIG, FLEX_EXTERNAL),
     ChannelAssetPage("flex-internal-assets.html", FLEX_CONFIG, FLEX_INTERNAL),
     ChannelAssetPage("ot2-external-assets.html", OT2_CONFIG, OT2_EXTERNAL),
     ChannelAssetPage("ot2-internal-assets.html", OT2_CONFIG, OT2_INTERNAL),
 )
 
 
-def render_index(generated_at: str, limit: int) -> str:
-    """Render a landing page linking to channel asset reports and release guides."""
-    asset_items = "".join(
-        f"""
-      <li>
-        <a href="{html.escape(item.filename)}">{html.escape(item.title)}</a>
-      </li>"""
-        for item in ASSET_NAV
-    )
-    guide_items = "".join(
-        f"""
-      <li>
-        <a href="{html.escape(item.filename)}">{html.escape(item.title)}</a>
-        <div class="meta">Tag logic and manifest URLs for <code>just go</code></div>
-      </li>"""
-        for item in GUIDE_NAV
-    )
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Opentrons release assets</title>
-  <style>
-    {site_nav_css()}
-    :root {{
-      color-scheme: light dark;
-      --bg: #0f1419;
-      --panel: #1a222d;
-      --text: #e7ecf3;
-      --muted: #9aa7b8;
-      --accent: #60a5fa;
-      --border: #2b3645;
-    }}
-    @media (prefers-color-scheme: light) {{
-      :root {{
-        --bg: #f6f8fb;
-        --panel: #ffffff;
-        --text: #1f2937;
-        --muted: #6b7280;
-        --accent: #2563eb;
-        --border: #d1d5db;
-      }}
-    }}
-    body {{
-      margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.5;
-    }}
-    main {{
-      max-width: 720px;
-      margin: 0 auto;
-      padding: 2rem 1.25rem 4rem;
-    }}
-    h1 {{ margin-top: 0; }}
-    p {{ color: var(--muted); }}
-    ul {{
-      list-style: none;
-      padding: 0;
-      display: grid;
-      gap: 1rem;
-    }}
-    li {{
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 1rem 1.25rem;
-    }}
-    li.section-title {{
-      background: transparent;
-      border: none;
-      padding: 0.5rem 0 0;
-      font-size: 0.85rem;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--muted);
-    }}
-    a {{
-      color: var(--accent);
-      font-size: 1.1rem;
-      font-weight: 600;
-      text-decoration: none;
-    }}
-    a:hover {{ text-decoration: underline; }}
-    .meta {{ margin-top: 0.35rem; font-size: 0.95rem; }}
-  </style>
-</head>
-<body>
-  {render_site_header(INDEX_PAGE)}
-  <main>
-    <h1>Opentrons release assets</h1>
-    <p>Live inventories of app and robot OS artifacts from S3/CloudFront.
-    Each report shows the {limit} most recent versions per manifest.
-    Updated {html.escape(generated_at)}.</p>
-    <ul>
-      <li class="section-title">Live asset inventories</li>{asset_items}
-      <li class="section-title">Release guides</li>{guide_items}
-    </ul>
-  </main>
-</body>
-</html>
-"""
-
-
-async def generate_channel_asset_report(page: ChannelAssetPage, output: Path, limit: int) -> None:
+async def generate_channel_asset_report(
+    page: ChannelAssetPage,
+    output: Path,
+    limit: int,
+    *,
+    nav_page: str,
+) -> None:
     """Fetch one channel manifest set and write its HTML report."""
     async with httpx.AsyncClient(follow_redirects=True) as client:
         snapshot = await fetch_channel_snapshot(client, page.channel, page.config, limit)
     write_report(
         output,
-        render_html([snapshot], page.config, limit, current_page=page.filename),
+        render_html([snapshot], page.config, limit, current_page=nav_page),
     )
     print(f"Wrote {output.resolve()}")
 
 
 async def publish_pages(output_dir: Path, limit: int) -> None:
-    """Generate index, per-channel asset inventories, and release guides under output_dir."""
+    """Generate per-channel asset inventories, release guides, and index (Flex external)."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    await asyncio.gather(
-        *[
-            generate_channel_asset_report(
-                page,
-                output_dir / page.filename,
-                limit,
-            )
-            for page in CHANNEL_ASSET_PAGES
-        ]
+    async def write_page(page: ChannelAssetPage) -> None:
+        await generate_channel_asset_report(
+            page,
+            output_dir / page.filename,
+            limit,
+            nav_page=page.filename,
+        )
+
+    await asyncio.gather(*[write_page(page) for page in CHANNEL_ASSET_PAGES])
+
+    # Site root is Flex external assets; highlight "External assets" in the nav.
+    await generate_channel_asset_report(
+        CHANNEL_ASSET_PAGES[0],
+        output_dir / INDEX_PAGE,
+        limit,
+        nav_page=INDEX_PAGE,
     )
+
     publish_release_guides(output_dir)
-    index_path = output_dir / INDEX_PAGE
-    write_report(index_path, render_index(generated_at, limit))
-    print(f"Wrote {index_path.resolve()}")
 
 
 def build_parser() -> argparse.ArgumentParser:

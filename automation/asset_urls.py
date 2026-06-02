@@ -29,12 +29,12 @@ class AssetChannel:
 
 
 def app_manifest_url(channel: AssetChannel) -> str:
-    """Return the informational app releases.json URL for a channel."""
+    """Return the app releases.json URL for a channel (edge routing and release validation)."""
     return f"https://{channel.app_host}/{APP_PREFIX}/releases.json"
 
 
 def robot_manifest_url(channel: AssetChannel, robot_prefix: str) -> str:
-    """Return the robot OS releases.json URL for a channel."""
+    """Return the robot OS releases.json URL for a channel (on-robot source of truth)."""
     return f"https://{channel.robot_host}/{robot_prefix}/releases.json"
 
 

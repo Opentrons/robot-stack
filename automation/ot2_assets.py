@@ -56,8 +56,8 @@ OT2_CONFIG = ReleasePlatformConfig(
         ),
     ),
     pipeline_footnote=(
-        "Electron-updater reads the channel YAML files directly. The JSON manifests are informational "
-        "for humans and release validation; robots read <code>ot2-br/releases.json</code>. "
+        "See the channel section below for robot vs app manifest authority. "
+        "OT-2 robots read <code>ot2-br/releases.json</code> for on-robot updates. "
         "External app URLs in <code>releases.json</code> use "
         "<code>https://ot2.builds.opentrons.com/app/</code> after "
         "<code>feat/ot2-calendar-semver-build</code> (edge still writes <code>ot2.opentrons.com</code>)."

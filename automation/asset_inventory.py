@@ -19,7 +19,7 @@ import yaml
 
 from automation.asset_urls import APP_CHANNEL_YAMLS, AssetChannel, app_manifest_url, app_yaml_url, robot_manifest_url
 from automation.go import decode_ot2_external_version, decode_ot2_internal_version
-from automation.site_nav import render_site_header, site_nav_css
+from automation.site_nav import render_site_header, robot_name_html, site_nav_css
 
 DEFAULT_LIMIT = 10
 
@@ -495,6 +495,20 @@ def render_robot_releases(releases: Sequence[RobotReleaseRow], robot_repo: str) 
     """
 
 
+def render_manifest_authority_note() -> str:
+    """Explain authoritative manifests vs electron-updater YAML and edge routing."""
+    return """
+      <p class="note manifest-note">
+        <strong>Robot OS:</strong> <code>releases.json</code> is the source of truth for on-robot updates.
+        <strong>Desktop app:</strong> channel YAML files (<code>latest.yml</code>, <code>latest-mac.yml</code>,
+        <code>latest-linux.yml</code>, and prerelease YAMLs) are authoritative; electron-updater reads those
+        directly. App <code>releases.json</code> is not the app updater source of truth: a CloudFront edge
+        function parses the latest stable semver from production and routes <code>latest*</code> requests to
+        matching stable build artifacts. The tables below are still useful for humans and release validation.
+      </p>
+    """
+
+
 def render_channel_section(snapshot: ChannelSnapshot, config: ReleasePlatformConfig) -> str:
     """Render one internal/external channel block."""
     return f"""
@@ -506,6 +520,7 @@ def render_channel_section(snapshot: ChannelSnapshot, config: ReleasePlatformCon
         <div><strong>Robot manifest:</strong> {link(snapshot.robot_manifest_url)}</div>
       </div>
       {legacy_app_host_warning(snapshot, config)}
+      {render_manifest_authority_note()}
 
       <h3>Electron-updater channel YAMLs</h3>
       {render_yaml_channels(snapshot.yaml_channels)}
@@ -526,6 +541,15 @@ def report_page_title(config: ReleasePlatformConfig, snapshots: Sequence[Channel
     return config.html_title
 
 
+def render_page_h1(config: ReleasePlatformConfig, snapshots: Sequence[ChannelSnapshot]) -> str:
+    """Build the main page heading with robot name in display font."""
+    if len(snapshots) == 1:
+        snap = snapshots[0]
+        suffix = f"{snap.channel.label} release assets"
+        return f"<h1>{robot_name_html(config.display_name)} {esc(suffix)}</h1>"
+    return f"<h1>{esc(config.html_title)}</h1>"
+
+
 def render_html(
     snapshots: Sequence[ChannelSnapshot],
     config: ReleasePlatformConfig,
@@ -538,6 +562,7 @@ def render_html(
     all_errors = [err for snap in snapshots for err in snap.errors]
     single_channel = snapshots[0].channel if len(snapshots) == 1 else None
     page_title = report_page_title(config, snapshots)
+    page_h1 = render_page_h1(config, snapshots)
     channel_html = "".join(render_channel_section(snap, config) for snap in snapshots)
     header = render_site_header(current_page) if current_page else ""
     nav_css = site_nav_css() if current_page else ""
@@ -626,7 +651,7 @@ def render_html(
 <body>
   {header}
   <main>
-    <h1>{esc(page_title)}</h1>
+    {page_h1}
     <p class="lede">Live inventory of {esc(config.display_name)} app and robot OS artifacts published to S3/CloudFront.
     Showing the {limit} most recent versions per manifest. Generated {esc(generated_at)}.</p>
     {render_pipeline_map(config, single_channel)}

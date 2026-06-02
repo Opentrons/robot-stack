@@ -56,9 +56,10 @@ FLEX_CONFIG = ReleasePlatformConfig(
         ),
     ),
     pipeline_footnote=(
-        "Electron-updater reads the channel YAML files directly. The JSON manifests are informational "
-        "for humans and release validation; Flex robots read <code>ot3-oe/releases.json</code>. "
-        "External app deploy also invalidates the CloudFront distribution for <code>builds.opentrons.com</code>."
+        "See the channel section below for robot vs app manifest authority. "
+        "Flex robots read <code>ot3-oe/releases.json</code> for on-robot updates. "
+        "CloudFront for <code>builds.opentrons.com</code> is not invalidated by CI; run "
+        "<code>just invalidate-cloudfront</code> manually after external app builds finish."
     ),
 )
 
