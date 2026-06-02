@@ -1,6 +1,34 @@
 # robot-stack
 
-Tools to inspect, tag, and build Opentrons robots across the multi-repo software stack.
+Python tooling to plan Opentrons robot releases across the multi-repo stack (Flex and OT-2): which repos need tags, what each tag should look like, where CI runs after you push, and which CloudFront invalidation to run when builds finish.
+
+## Recommended workflow (Cursor)
+
+Open this repo in [Cursor](https://cursor.com) and start a chat along these lines:
+
+> I need to do a new release for **Flex** (or **OT-2**). It will be **internal** or **external**, and **stable**, **alpha**, or **beta** (Flex internal/external use **stable** or **unstable** for alpha).
+
+Workspace rules in `.cursor/rules/` teach the agent how to run the scripts below. It will sync local clones, print release analysis, and suggest copy-paste `git tag` / `git push` commands. **Nothing is pushed or invalidated automatically**; review the output, confirm you agree, then run the printed steps yourself.
+
+Prompt Cursor as above and it will walk you through the full release in order, running the advisory scripts and printing what to do next at each stage:
+
+1. **Plan tags** — runs `just go` to show what needs tags and the tag shape per repo.
+2. **Push tags** — prints `git tag` / `git push` commands for you to run (stack repos first, app last).
+3. **Track builds** — runs `just track-builds` after the app tag is pushed to surface app, kickoff, and robot OS workflow runs.
+4. **Verify builds** — reminds you to wait for CI and spot-check manifests if needed.
+5. **Invalidate CDN** — runs `just invalidate-cloudfront` to print the exact `aws cloudfront create-invalidation` command (distribution and paths) for your tag and channel.
+
+### TODO: release checklists
+
+Generate a **release checklist** for each run (tag plan, commands run, build links, invalidation, sign-off). Checklists will be committed in this repository and published on [GitHub Pages](https://opentrons.github.io/robot-stack/) alongside asset inventories and release guides, with an index page listing past releases.
+
+The sections below document the same commands for interactive or scripted use without Cursor.
+
+**Live asset inventories and release guides:** [opentrons.github.io/robot-stack](https://opentrons.github.io/robot-stack/)
+
+**Regenerate that site:** run the [Publish asset inventory to GitHub Pages](https://github.com/Opentrons/robot-stack/actions/workflows/asset-inventory-pages.yml) workflow (`workflow_dispatch` on `main`, or push to `main`).
+
+## Setup
 
 The only external dependency is [uv](https://docs.astral.sh/uv/).
 

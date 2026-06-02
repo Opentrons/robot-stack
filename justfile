@@ -8,20 +8,23 @@
 
 # update opentrons repositories
 @go *args:
-    uv run ./automation/go.py {{args}}
+    uv run ./automation/go.py {{ args }}
 
 # find GitHub Actions build jobs for a pushed OT-2 or Flex release tag
 @track-builds *args:
-    uv run ./automation/track_builds.py {{args}}
+    uv run ./automation/track_builds.py {{ args }}
 
 # print CloudFront invalidation command for a release tag
 @invalidate-cloudfront *args:
-    uv run ./automation/invalidate_cloudfront.py {{args}}
+    uv run ./automation/invalidate_cloudfront.py {{ args }}
 
 # format and lint with ruff
 @fix:
     uv run ruff format .
     uv run ruff check --fix --unsafe-fixes .
+
+# format justfile, lint/format Python, and type-check (run before commit or PR)
+@prep: fmt fix ty
 
 @manifest:
     uv run ./automation/manifest.py

@@ -205,20 +205,13 @@ def _render_nav_link(item: SiteLink, current_page: str) -> str:
     is_current = nav_link_is_current(item, current_page)
     current_attr = ' aria-current="page"' if is_current else ""
     current_class = ' class="nav-current"' if is_current else ""
-    return (
-        f'<a href="{html.escape(item.filename)}"{current_class}{current_attr}>'
-        f"{html.escape(item.title)}</a>"
-    )
+    return f'<a href="{html.escape(item.filename)}"{current_class}{current_attr}>{html.escape(item.title)}</a>'
 
 
 def _render_nav_block(kind: str, links: Tuple[SiteLink, ...], current_page: str) -> str:
     """Render a vertical block of links under a section label."""
     link_html = "".join(_render_nav_link(item, current_page) for item in links)
-    return (
-        f'<div class="nav-block">'
-        f'<span class="nav-kind">{html.escape(kind)}</span>{link_html}'
-        f"</div>"
-    )
+    return f'<div class="nav-block"><span class="nav-kind">{html.escape(kind)}</span>{link_html}</div>'
 
 
 def render_site_header(current_page: str) -> str:
@@ -227,9 +220,9 @@ def render_site_header(current_page: str) -> str:
     for group in PRODUCT_NAV:
         groups.append(
             f'<div class="nav-group">'
-            f'{robot_name_html(group.label)}'
-            f'{_render_nav_block("Assets", group.asset_links, current_page)}'
-            f'{_render_nav_block("Guides", group.guide_links, current_page)}'
+            f"{robot_name_html(group.label)}"
+            f"{_render_nav_block('Assets', group.asset_links, current_page)}"
+            f"{_render_nav_block('Guides', group.guide_links, current_page)}"
             f"</div>"
         )
 

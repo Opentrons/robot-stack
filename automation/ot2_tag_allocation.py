@@ -52,11 +52,7 @@ def _external_stability_bases_in_month(
             year, month, release_num, tag_pre, tag_pre_num = decode_ot2_external_version(version)
         except ValueError:
             continue
-        if (
-            (year, month) == (release_date.year, release_date.month)
-            and tag_pre == stability
-            and tag_pre_num is not None
-        ):
+        if (year, month) == (release_date.year, release_date.month) and tag_pre == stability and tag_pre_num is not None:
             bases.add(release_num)
     return bases
 

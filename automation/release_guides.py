@@ -6,7 +6,7 @@ import html
 from pathlib import Path
 from typing import Final, Tuple
 
-from automation.asset_urls import APP_CHANNEL_YAMLS, app_manifest_url, app_yaml_url, robot_manifest_url
+from automation.asset_urls import APP_CHANNEL_YAMLS, app_manifest_url, robot_manifest_url
 from automation.flex_urls import FLEX_EXTERNAL, FLEX_INTERNAL, FLEX_ROBOT_PREFIX
 from automation.ot2_urls import OT2_EXTERNAL, OT2_INTERNAL, OT2_ROBOT_PREFIX
 from automation.site_nav import GUIDE_NAV, render_site_header, robot_name_html, site_nav_css
