@@ -26,7 +26,7 @@ The system supports internal and external release channels. This tool helps enfo
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo, but is not included in release tables or tagging.
 
-Isolation branches follow `chore_release-<version>` in each repo for **Flex external** releases only. **Flex internal** and **all OT-2** releases tag default-branch HEAD and do not use `chore_release` branches.
+Isolation branches follow `chore_release-<version>` in each repo for **Flex external** releases only. **Flex internal** and **all OT-2** releases tag default-branch HEAD and do not use `chore_release` branches. For Flex external, `just go` includes `git checkout chore_release-<version>` in each suggested tag command block; run that checkout in each repo before tagging.
 
 ## Local Cloned Repos (Source of Truth)
 
@@ -181,7 +181,7 @@ Run everything via `uv run just <recipe> ...` or `uv run ./automation/<script>.p
 ### Typical release sequence
 
 1. **Plan tags:** `just go --non-interactive --skip-assumptions --path flex|ot2 --release-type internal|external --stability ... [--version ...]`
-2. **Human:** run printed `git tag -a` / `git push` commands in each repo (stack repos first, app last)
+2. **Human:** run printed tag commands in each repo (stack repos first, app last). For Flex external, `git checkout chore_release-<version>` is included before each `git tag -a`
 3. **Track CI:** `just track-builds --non-interactive --path flex|ot2 --tag <app-tag> --wait`
 4. **Human:** wait for builds; validate manifests if needed (`just ot2-assets` / `just flex-assets`)
 5. **Print invalidation:** `just invalidate-cloudfront --non-interactive --path flex|ot2 --tag <app-tag>`
@@ -211,7 +211,7 @@ just go --non-interactive --skip-assumptions --path ot2 --release-type internal 
 just go --non-interactive --skip-assumptions --path flex --release-type internal --stability unstable --version v8.5.0
 ```
 
-**Output includes:** latest-tag summary, change-since-tag tables, tag push order, per-repo tag plans (`git tag -a` / `git push` suggestions), app tag section, and a **Next steps** panel with `track-builds` and `invalidate-cloudfront` commands.
+**Output includes:** latest-tag summary, change-since-tag tables, tag push order, per-repo tag plans (`git checkout` on `chore_release-*` for Flex external, then `git tag -a` / `git push` suggestions), app tag section, and a **Next steps** panel with `track-builds` and `invalidate-cloudfront` commands.
 
 ### `just track-builds` (`automation/track_builds.py`)
 

@@ -18,6 +18,8 @@ from automation.go import (
     RepoState,
     branches_to_sync,
     chore_release_branch,
+    format_tag_commands,
+    is_chore_release_branch,
     release_branch_for_repo,
     release_on_default_branch,
     repo_by_name,
@@ -33,6 +35,26 @@ BUILDROOT = repo_by_name("buildroot")
 class TestChoreReleaseBranch(unittest.TestCase):
     def test_strips_v_prefix(self) -> None:
         self.assertEqual(chore_release_branch("v9.1.0"), "chore_release-9.1.0")
+
+    def test_is_chore_release_branch(self) -> None:
+        self.assertTrue(is_chore_release_branch("chore_release-9.1.0"))
+        self.assertFalse(is_chore_release_branch("edge"))
+
+
+class TestFormatTagCommands(unittest.TestCase):
+    def test_includes_checkout_on_chore_release_branch(self) -> None:
+        commands = format_tag_commands(
+            "v0.10.2",
+            "v9.1.0-alpha.4",
+            branch="chore_release-9.1.0",
+        )
+        self.assertEqual(commands[0], ("Checkout", "git checkout chore_release-9.1.0"))
+        self.assertEqual(commands[1][0], "Create")
+
+    def test_omits_checkout_on_default_branch(self) -> None:
+        commands = format_tag_commands("ot3@8.5.0", "ot3@8.5.0", branch="edge")
+        self.assertEqual(commands[0][0], "Create")
+        self.assertEqual(len(commands), 3)
 
 
 class TestReleaseOnDefaultBranch(unittest.TestCase):

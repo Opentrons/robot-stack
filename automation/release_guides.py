@@ -71,7 +71,9 @@ def _release_branch_section(path: str, channel: str) -> str:
     <p>Flex <strong>external</strong> prefers isolation branches
     <code>chore_release-&lt;version&gt;</code> (for example <code>chore_release-9.1.0</code>, without a
     <code>v</code> prefix in the branch name) when that branch exists on the remote after
-    <code>just go</code> syncs repos. Otherwise <code>go</code> uses each repo&apos;s default branch.</p>
+    <code>just go</code> syncs repos. Otherwise <code>go</code> uses each repo&apos;s default branch.
+    Suggested tag commands include <code>git checkout chore_release-&lt;version&gt;</code> before
+    <code>git tag -a</code> when that branch is the release branch.</p>
     {branches}
     <p>Default version inference: highest <code>chore_release-X.Y.Z</code> on <code>opentrons</code>,
     with fallback to the latest merged <code>v*</code> tag base.</p>
@@ -106,7 +108,9 @@ def _tag_need_section() -> str:
     </div>
     <p>Tags must be annotated (<code>git tag -a … -m 'chore(release): …'</code>) so
     <code>git tag -l --sort=-creatordate</code> reflects real release order. Stack repo tag messages
-    often reference the monorepo release version.</p>
+    often reference the monorepo release version. Flex external tag blocks also print
+    <code>git checkout chore_release-&lt;version&gt;</code> so operators tag the isolation branch, not
+    default-branch HEAD.</p>
     <p>Pushing a tag triggers CI builds in the tagged repo. The app monorepo tag drives app
     artifacts; stack repo tags drive robot OS and firmware builds.</p>
     """

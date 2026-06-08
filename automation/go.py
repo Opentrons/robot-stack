@@ -350,12 +350,29 @@ def get_next_ot2_tag_command(
     )
 
 
-def format_tag_commands(next_tag: str, release_version: str) -> Tuple[str, str, str]:
-    """Return create, verify, and push commands for an annotated release tag."""
-    create = f"git tag -a {next_tag} -m 'chore(release): {release_version}'"
-    verify = f"git log {next_tag} --oneline -n 10"
-    push = f"git push origin {next_tag}"
-    return create, verify, push
+def is_chore_release_branch(branch: str) -> bool:
+    """Return True when branch is a Flex external isolation branch."""
+    return branch.startswith("chore_release-")
+
+
+def format_tag_commands(
+    next_tag: str,
+    release_version: str,
+    *,
+    branch: Optional[str] = None,
+) -> List[Tuple[str, str]]:
+    """Return labeled shell commands for creating and pushing an annotated release tag."""
+    commands: List[Tuple[str, str]] = []
+    if branch is not None and is_chore_release_branch(branch):
+        commands.append(("Checkout", f"git checkout {branch}"))
+    commands.extend(
+        [
+            ("Create", f"git tag -a {next_tag} -m 'chore(release): {release_version}'"),
+            ("Verify", f"git log {next_tag} --oneline -n 10"),
+            ("Push", f"git push origin {next_tag}"),
+        ]
+    )
+    return commands
 
 
 def release_branch_for_repo(
@@ -668,16 +685,22 @@ def release_version_label(
     return version if version.startswith("v") else f"v{version}"
 
 
-def print_suggested_tag_block(label: str, next_tag: str, release_version: str) -> None:
+def print_suggested_tag_block(
+    label: str,
+    next_tag: str,
+    release_version: str,
+    *,
+    branch: Optional[str] = None,
+) -> None:
     """Print a header panel and git commands for creating and pushing a tag."""
-    create, verify, push = format_tag_commands(next_tag, release_version)
+    command_lines = format_tag_commands(next_tag, release_version, branch=branch)
+    body = f"[bold cyan]{next_tag}[/]\n\n"
+    for cmd_label, cmd in command_lines:
+        body += f"[bold green]{cmd_label}:[/] {cmd}\n"
     console.print()
     console.print(
         Panel(
-            f"[bold cyan]{next_tag}[/]\n\n"
-            f"[bold green]Create:[/] {create}\n"
-            f"[bold green]Verify:[/] {verify}\n"
-            f"[bold green]Push:[/]   {push}",
+            body.rstrip(),
             title=f"Suggested {label}",
             border_style="green",
             padding=(1, 2),
@@ -699,7 +722,7 @@ def print_tag_plan(repo: RepoSpec, plan: TagPlan, release_version: str) -> None:
         console.print("[red]Could not determine next tag[/]")
         return
 
-    print_suggested_tag_block(f"{repo.name} tag", plan.next_tag, release_version)
+    print_suggested_tag_block(f"{repo.name} tag", plan.next_tag, release_version, branch=plan.branch)
 
 
 def get_next_tag_command(
@@ -1114,6 +1137,7 @@ ASSUMPTIONS_MARKDOWN = Markdown(
     - This gives the tag a message, creator, and date
     - Then we use `git tag -l --sort=-creatordate` to get the latest tag
 - Flex **external** releases use isolation branches named `chore_release-<version>` when present
+  - suggested tag commands include `git checkout chore_release-<version>` before `git tag -a`
 - Flex **internal** and all **OT-2** releases tag default-branch HEAD
   (`edge` / `opentrons-develop` / `main`); no `chore_release` branch
   - `opentrons`: `ot3@X.Y.Z` / `ot3@X.Y.Z-alpha.N`
@@ -1189,7 +1213,7 @@ def print_app_tag_section(
     next_tag = compute_app_tag(release_path, results, version, release_type, stability)
     if next_tag is None:
         return
-    print_suggested_tag_block("app tag", next_tag, release_version)
+    print_suggested_tag_block("app tag", next_tag, release_version, branch=branch)
 
 
 def stack_repo_push_order(release_path: ReleasePath) -> List[str]:
@@ -1197,7 +1221,12 @@ def stack_repo_push_order(release_path: ReleasePath) -> List[str]:
     return list(release_path.stack_tag_repos)
 
 
-def print_tag_push_order_note(release_path: ReleasePath) -> None:
+def print_tag_push_order_note(
+    release_path: ReleasePath,
+    *,
+    release_type: Optional[str] = None,
+    version: Optional[str] = None,
+) -> None:
     """Remind the operator to push dependent repo tags before the app monorepo tag."""
     ordered = stack_repo_push_order(release_path)
     lines = [
@@ -1210,6 +1239,18 @@ def print_tag_push_order_note(release_path: ReleasePath) -> None:
         lines.append(f"{step}. [bold]{repo_name}[/] ({label}), if a new tag is needed")
         step += 1
     lines.append(f"{step}. [bold]{release_path.taggable_repo}[/] (app), always last")
+    if (
+        release_path.name == "flex"
+        and release_type == "external"
+        and version is not None
+    ):
+        lines.extend(
+            [
+                "",
+                "Flex external: run [bold]git checkout "
+                f"{chore_release_branch(version)}[/] in each repo before tagging.",
+            ]
+        )
     console.print()
     console.print(Panel("\n".join(lines), title="Tag push order", border_style="yellow", padding=(1, 2)))
 
@@ -1359,7 +1400,7 @@ def run_release(
     else:
         print_internal_table(results, active_repos, version, release_path, release_type)
 
-    print_tag_push_order_note(release_path)
+    print_tag_push_order_note(release_path, release_type=release_type, version=version)
 
     app_tag = compute_app_tag(release_path, results, version, release_type, stability)
     release_version = release_version_label(release_path, release_type, version, app_tag)

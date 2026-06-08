@@ -63,6 +63,8 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 
 Each repo uses isolation branches named `chore_release-<version>` during a **Flex external** release cycle. Flex **internal** and all **OT-2** releases tag default-branch HEAD instead (`edge` / `opentrons-develop` / `main`).
 
+For **Flex external** releases, `just go` prints `git checkout chore_release-<version>` before each suggested `git tag -a` command. Run that checkout in each repo before creating and pushing tags.
+
 ### Tag push order
 
 Push annotated tags in this order. Stack repos first, app monorepo last.
