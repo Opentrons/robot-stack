@@ -360,7 +360,7 @@ def render_flex_external() -> str:
     body = f"""
     <p class="lede">Customer-facing Flex releases. App tags use a <code>v</code> prefix in
     <a href="https://github.com/Opentrons/opentrons">opentrons</a>.
-    Robot OS and firmware use their own tag lines in
+    Robot OS and firmware use the <strong>same coordinated tag</strong> in
     <a href="https://github.com/Opentrons/oe-core">oe-core</a> and
     <a href="https://github.com/Opentrons/ot3-firmware">ot3-firmware</a>.</p>
 
@@ -368,9 +368,9 @@ def render_flex_external() -> str:
     <table>
       <thead><tr><th>Repo</th><th>Role</th><th>External tag pattern</th></tr></thead>
       <tbody>
-        <tr><td><code>opentrons</code></td><td>App (taggable)</td><td><code>vX.Y.Z</code>, alpha <code>vX.Y.Z-alpha.N</code></td></tr>
-        <tr><td><code>oe-core</code></td><td>Flex robot OS</td><td><code>v0.X.Y</code> (independent semver line)</td></tr>
-        <tr><td><code>ot3-firmware</code></td><td>Flex firmware</td><td><code>vN</code> integer counter</td></tr>
+        <tr><td><code>opentrons</code></td><td>App (taggable)</td><td><code>vX.Y.Z</code>, alpha <code>vX.Y.Z-alpha.N</code>, beta <code>vX.Y.Z-beta.N</code></td></tr>
+        <tr><td><code>oe-core</code></td><td>Flex robot OS</td><td>Same coordinated tag as app (e.g. <code>v10.0.0-beta.0</code>)</td></tr>
+        <tr><td><code>ot3-firmware</code></td><td>Flex firmware</td><td>Same coordinated tag as app</td></tr>
       </tbody>
     </table>
 
@@ -385,21 +385,16 @@ def render_flex_external() -> str:
     <ul>
       <li><strong>Stable:</strong> tag is exactly the base version, e.g. <code>v9.1.0</code>,
       if that tag does not already exist on the branch.</li>
-      <li><strong>Alpha (unstable in <code>go</code>):</strong> find tags matching
+      <li><strong>Alpha:</strong> find tags matching
       <code>v9.1.0-alpha.*</code> on the branch and increment <code>N</code>
       (first alpha is <code>v9.1.0-alpha.0</code>).</li>
+      <li><strong>Beta:</strong> increment <code>v9.1.0-beta.N</code> (VM isolation train).</li>
     </ul>
 
-    <h3>Robot OS (<code>oe-core</code>)</h3>
-    <p>oe-core external versions are <em>not</em> the same as the app semver. Tags look like
-    <code>v0.10.0</code> and often reference the robot-stack version in the tag message.</p>
-    <p>When a new external tag is needed, <code>go</code> bumps the patch of the newest
-    <code>v*</code> tag merged into the release branch (e.g. <code>v0.10.0</code> → <code>v0.10.1</code>).</p>
-
-    <h3>Firmware (<code>ot3-firmware</code>)</h3>
-    <p>External tags are simple integers: <code>v69</code>, <code>v70</code>, …</p>
-    <p>When a new tag is needed, <code>go</code> takes the highest <code>vN</code> number merged
-    into the branch and suggests <code>v(N+1)</code>.</p>
+    <h3>Robot OS (<code>oe-core</code>) and firmware (<code>ot3-firmware</code>)</h3>
+    <p>Coordinated Flex releases use the <strong>same tag</strong> on all three repos.
+    Before pushing the app tag, run
+    <code>just validate-release-tags --tag &lt;app-tag&gt;</code>.</p>
 
     {_tag_push_order_section("flex")}
 
@@ -424,20 +419,20 @@ def render_flex_external() -> str:
     <div class="alpha-beta">
       <h2>Alpha and beta on Flex external</h2>
       <p>In <code>just go</code>, choose <strong>Release type: external</strong> and
-      <strong>Stability: unstable</strong> for alpha QA builds.</p>
+      <strong>Stability: alpha</strong> or <strong>beta</strong> for prerelease QA builds.</p>
       <table>
         <thead><tr><th>Stability</th><th>App tag example</th><th>Typical app YAML</th></tr></thead>
         <tbody>
           <tr><td>Stable</td><td><code>v9.1.0</code></td><td><code>latest.yml</code> (+ mac/linux)</td></tr>
           <tr><td>Alpha</td><td><code>v9.1.0-alpha.0</code>, <code>v9.1.0-alpha.1</code>, …</td><td><code>alpha.yml</code> (+ mac/linux)</td></tr>
-          <tr><td>Beta</td><td><code>v9.1.0-beta.0</code> (manual; not computed by <code>go</code> today)</td><td><code>beta.yml</code> (+ mac/linux)</td></tr>
+          <tr><td>Beta</td><td><code>v9.1.0-beta.0</code>, <code>v9.1.0-beta.1</code>, …</td><td><code>beta.yml</code> (+ mac/linux)</td></tr>
         </tbody>
       </table>
-      <p>Alpha tags increment <code>.N</code> on a fixed base version during QA on
-      <code>chore_release-*</code>. Beta follows the same semver prerelease pattern with a
-      <code>-beta.N</code> suffix. Stable external releases drop the prerelease segment entirely.</p>
-      <p>oe-core and ot3-firmware do not mirror the app alpha suffix; they use their own
-      external tag schemes above when their release branches move ahead of the latest channel tag.</p>
+      <p>Alpha and beta tags increment <code>.N</code> on a fixed base version during QA on
+      <code>chore_release-*</code>. Stable external releases drop the prerelease segment entirely.</p>
+      <p><code>oe-core</code> and <code>ot3-firmware</code> use the <strong>same coordinated tag</strong>
+      as the app (for example <code>v9.1.0-beta.0</code> on all three repos). Validate with
+      <code>just validate-release-tags --tag &lt;app-tag&gt;</code> before pushing the app tag.</p>
     </div>
     """
     return _wrap_page("flex-external.html", "external releases", body, robot_name="Flex")
@@ -456,9 +451,9 @@ def render_flex_internal() -> str:
     <table>
       <thead><tr><th>Repo</th><th>Role</th><th>Internal tag pattern</th></tr></thead>
       <tbody>
-        <tr><td><code>opentrons</code></td><td>App (taggable)</td><td><code>ot3@X.Y.Z</code>, alpha <code>ot3@X.Y.Z-alpha.N</code></td></tr>
-        <tr><td><code>oe-core</code></td><td>Flex robot OS</td><td><code>internal@X.Y.Z</code>, alpha <code>internal@X.Y.Z-alpha.N</code></td></tr>
-        <tr><td><code>ot3-firmware</code></td><td>Flex firmware</td><td><code>internal@vN</code> integer counter</td></tr>
+        <tr><td><code>opentrons</code></td><td>App (taggable)</td><td><code>ot3@X.Y.Z</code>, alpha <code>ot3@X.Y.Z-alpha.N</code>, beta <code>ot3@X.Y.Z-beta.N</code></td></tr>
+        <tr><td><code>oe-core</code></td><td>Flex robot OS</td><td>Same coordinated tag as app (e.g. <code>ot3@X.Y.Z-beta.N</code>)</td></tr>
+        <tr><td><code>ot3-firmware</code></td><td>Flex firmware</td><td>Same coordinated tag as app</td></tr>
       </tbody>
     </table>
 
@@ -469,32 +464,29 @@ def render_flex_internal() -> str:
     {_tag_need_section()}
 
     <h2>How the next tag is chosen</h2>
-    <p>In <code>just go</code>, Flex uses <strong>Stability: stable</strong> or
-    <strong>unstable</strong> (<code>unstable</code> means alpha builds).</p>
+    <p>In <code>just go</code>, Flex uses <strong>Stability: stable</strong>,
+    <strong>alpha</strong>, or <strong>beta</strong>.</p>
     <h3>App (<code>opentrons</code>)</h3>
     <ul>
       <li><strong>Stable:</strong> <code>ot3@X.Y.Z</code> if not already on the branch; otherwise patch bump
       (e.g. <code>ot3@8.5.0</code> → <code>ot3@8.5.1</code>).</li>
-      <li><strong>Alpha (unstable):</strong> increment <code>ot3@X.Y.Z-alpha.N</code> from existing tags on the branch
+      <li><strong>Alpha:</strong> increment <code>ot3@X.Y.Z-alpha.N</code> from existing tags on the branch
       (first alpha is <code>ot3@8.5.0-alpha.0</code>).</li>
+      <li><strong>Beta:</strong> increment <code>ot3@X.Y.Z-beta.N</code> (VM isolation train; Beta app channel).</li>
     </ul>
 
-    <h3>Robot OS (<code>oe-core</code>)</h3>
-    <p>Internal tags use the <code>internal@</code> prefix without a leading <code>v</code>.
-    The base <code>X.Y.Z</code> comes from the same version you enter at the <code>just go</code> prompt
-    (not from the newest oe-core tag alone).</p>
+    <h3>Robot OS (<code>oe-core</code>) and firmware (<code>ot3-firmware</code>)</h3>
+    <p>Coordinated Flex releases use the <strong>same tag</strong> on all three repos
+    (<code>opentrons</code>, <code>oe-core</code>, <code>ot3-firmware</code>). The tag marks
+    which commit participated in that release even when a repo did not change.</p>
     <ul>
-      <li><strong>Alpha (unstable):</strong> <code>internal@X.Y.Z-alpha.N</code>. The alpha number
-      <code>N</code> is coordinated with the app: <code>go</code> reads the next
-      <code>ot3@X.Y.Z-alpha.N</code> from <code>opentrons</code> and reuses that <code>N</code>
-      for oe-core.</li>
-      <li><strong>Stable:</strong> <code>internal@X.Y.Z</code> if that exact tag is not on the branch;
-      otherwise patch bump (e.g. <code>internal@8.5.0</code> → <code>internal@8.5.1</code>).</li>
+      <li><strong>Stable:</strong> <code>ot3@X.Y.Z</code> on all three repos.</li>
+      <li><strong>Alpha:</strong> <code>ot3@X.Y.Z-alpha.N</code> on all three repos.</li>
+      <li><strong>Beta:</strong> <code>ot3@X.Y.Z-beta.N</code> on all three repos (VM isolation train).</li>
     </ul>
-
-    <h3>Firmware (<code>ot3-firmware</code>)</h3>
-    <p>Internal tags look like <code>internal@v26</code>, <code>internal@v27</code>.
-    When needed, <code>go</code> suggests one higher than the max merged tag number.</p>
+    <p>Before pushing the app tag, run
+    <code>just validate-release-tags --tag &lt;app-tag&gt;</code> to confirm all three
+    local clones have the tag.</p>
 
     {_tag_push_order_section("flex")}
 
@@ -519,17 +511,21 @@ def render_flex_internal() -> str:
     <div class="alpha-beta">
       <h2>Alpha and beta on Flex internal</h2>
       <p>In <code>just go</code>, choose <strong>Release type: internal</strong> and
-      <strong>Stability: unstable</strong> for internal alpha builds.</p>
+      <strong>Stability: alpha</strong> or <strong>beta</strong>.</p>
+      <p>Both trains use the <strong>same coordinated tag</strong> on all three repos. Typical
+      pairing on one <code>X.Y.Z</code> base:</p>
       <table>
-        <thead><tr><th>Stability</th><th>App tag example</th><th>oe-core example</th></tr></thead>
+        <thead><tr><th>Train</th><th>Stability</th><th>Tag example</th><th>Notes</th></tr></thead>
         <tbody>
-          <tr><td>Stable internal</td><td><code>ot3@8.5.0</code></td><td><code>internal@8.5.0</code> (same prompted base)</td></tr>
-          <tr><td>Alpha</td><td><code>ot3@8.5.0-alpha.0</code></td><td><code>internal@8.5.0-alpha.0</code> (same <code>N</code> as app)</td></tr>
-          <tr><td>Beta</td><td colspan="2">Manual only; <code>go</code> suggests stable and alpha (<code>unstable</code>) today</td></tr>
+          <tr><td>VM isolation</td><td>beta</td><td><code>ot3@4.0.0-beta.0</code></td><td>Beta app channel; first coordinated tag on a new base</td></tr>
+          <tr><td>CRS</td><td>alpha</td><td><code>ot3@4.0.0-alpha.4</code></td><td>Alpha app channel; increment <code>.N</code> on the branch</td></tr>
+          <tr><td>Stable</td><td>stable</td><td><code>ot3@4.0.0</code></td><td>Same prompted base version</td></tr>
         </tbody>
       </table>
-      <p>Internal alpha uses the same <code>-alpha.N</code> increment rules as external, but with
-      the <code>ot3@</code> and <code>internal@</code> prefixes.</p>
+      <p>When both channels need updates in the same cycle, ship <strong>beta before alpha</strong>:
+      beta desktop builds overwrite alpha updater YAML metadata.</p>
+      <p>Before pushing the app tag, run
+      <code>just validate-release-tags --tag &lt;app-tag&gt;</code>.</p>
     </div>
     """
     return _wrap_page("flex-internal.html", "internal releases", body, robot_name="Flex")

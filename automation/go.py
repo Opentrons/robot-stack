@@ -74,7 +74,15 @@ class TagPlan:
 OT3_FIRMWARE_EXTERNAL_TAG_RE = re.compile(r"^v(\d+)$")
 OT3_FIRMWARE_INTERNAL_TAG_RE = re.compile(r"^internal@v(\d+)$")
 OT2_STABILITIES = ("stable", "alpha", "beta")
-FLEX_STABILITIES = ("stable", "unstable")
+FLEX_STABILITIES = ("stable", "alpha", "beta")
+FLEX_COORDINATED_STACK_REPOS = frozenset({"oe-core", "ot3-firmware"})
+
+
+def normalize_flex_stability(stability: str) -> str:
+    """Map legacy Flex ``unstable`` to ``alpha`` for coordinated prerelease tags."""
+    if stability == "unstable":
+        return "alpha"
+    return stability
 
 
 def strip_tag_version(tag: str) -> str:
@@ -449,6 +457,29 @@ def next_alpha_number(tag_prefix: str, tags: List[str]) -> int:
     return max(numbers) + 1 if numbers else 0
 
 
+def next_beta_tag(tag_prefix: str, tags: List[str]) -> str:
+    """Return the next tag for a fixed beta prefix such as v8.5.0-beta."""
+    matching = [tag for tag in tags if tag.startswith(tag_prefix)]
+    numbers: List[int] = []
+    for tag in matching:
+        match = re.match(rf"{re.escape(tag_prefix)}(\d+)", tag)
+        if match is not None:
+            numbers.append(int(match.group(1)))
+    next_num = max(numbers) + 1 if numbers else 0
+    return f"{tag_prefix}{next_num}"
+
+
+def next_beta_number(tag_prefix: str, tags: List[str]) -> int:
+    """Return the next beta build number for a fixed beta prefix."""
+    matching = [tag for tag in tags if tag.startswith(tag_prefix)]
+    numbers: List[int] = []
+    for tag in matching:
+        match = re.match(rf"{re.escape(tag_prefix)}(\d+)", tag)
+        if match is not None:
+            numbers.append(int(match.group(1)))
+    return max(numbers) + 1 if numbers else 0
+
+
 SEMVER_BASE_RE = re.compile(r"^(\d+\.\d+\.\d+)")
 
 
@@ -522,12 +553,16 @@ def get_next_flex_app_tag_command(
 ) -> str:
     """Suggest the next opentrons tag for Flex (ot3@ internal, v external)."""
     branch_tags = tags_merged_on_branch(state, branch)
+    flex_stability = normalize_flex_stability(stability)
 
     if release_type == "internal":
         base = flex_release_semver_base(version)
-        if stability == "unstable":
+        if flex_stability == "alpha":
             alpha_num = next_alpha_number(f"ot3@{base}-alpha.", branch_tags)
             return f"ot3@{base}-alpha.{alpha_num}"
+        if flex_stability == "beta":
+            beta_num = next_beta_number(f"ot3@{base}-beta.", branch_tags)
+            return f"ot3@{base}-beta.{beta_num}"
 
         candidate = f"ot3@{base}"
         if candidate not in branch_tags:
@@ -536,8 +571,10 @@ def get_next_flex_app_tag_command(
         return f"ot3@{next_version}"
 
     release_version = version if version.startswith("v") else f"v{version}"
-    if stability == "unstable":
+    if flex_stability == "alpha":
         return next_alpha_tag(f"{release_version}-alpha.", branch_tags)
+    if flex_stability == "beta":
+        return next_beta_tag(f"{release_version}-beta.", branch_tags)
 
     matching = [tag for tag in branch_tags if tag.startswith(release_version)]
     if release_version not in matching:
@@ -630,6 +667,54 @@ def get_next_stack_repo_tag(
     raise ValueError(f"No tag suggestion logic for {repo.name}")
 
 
+def get_flex_coordinated_stack_tag_plan(
+    repo: RepoSpec,
+    state: RepoState,
+    version: str,
+    release_type: str,
+    stability: str,
+    release_path: ReleasePath,
+    results: Dict[str, RepoState],
+    app_tag: Optional[str],
+) -> TagPlan:
+    """Build a tag plan for oe-core or ot3-firmware using the opentrons release tag."""
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
+    coordinated = app_tag or compute_app_tag(release_path, results, version, release_type, stability)
+    if coordinated is None:
+        return TagPlan(
+            needs_tag=False,
+            latest_tag=latest_channel_tag(state, repo, branch, release_type),
+            next_tag=None,
+            branch=branch,
+            reason="could not determine coordinated app tag",
+        )
+
+    latest_tag = latest_channel_tag(state, repo, branch, release_type)
+    merged_tags = tags_merged_on_branch(state, branch)
+    tag_exists = coordinated in merged_tags
+    if tag_exists and branch_head_commit(repo, branch) == tag_commit(repo, coordinated):
+        return TagPlan(
+            needs_tag=False,
+            latest_tag=coordinated,
+            next_tag=None,
+            branch=branch,
+            reason=f"{branch} already at coordinated tag {coordinated}",
+        )
+
+    if tag_exists:
+        reason = f"commits on {branch} since {coordinated}"
+    else:
+        reason = f"coordinated tag {coordinated} not on {branch} yet"
+
+    return TagPlan(
+        needs_tag=True,
+        latest_tag=latest_tag,
+        next_tag=coordinated,
+        branch=branch,
+        reason=reason,
+    )
+
+
 def get_stack_repo_tag_plan(
     repo: RepoSpec,
     state: RepoState,
@@ -638,8 +723,23 @@ def get_stack_repo_tag_plan(
     stability: str,
     release_path: ReleasePath,
     results: Optional[Dict[str, RepoState]] = None,
+    app_tag: Optional[str] = None,
 ) -> TagPlan:
     """Decide whether a stack repo needs a tag and what it should be."""
+    if release_path.name == "flex" and repo.name in FLEX_COORDINATED_STACK_REPOS:
+        if results is None:
+            raise ValueError("Flex coordinated stack tag plans require synced repo results")
+        return get_flex_coordinated_stack_tag_plan(
+            repo,
+            state,
+            version,
+            release_type,
+            stability,
+            release_path,
+            results,
+            app_tag,
+        )
+
     branch = release_branch_for_repo(state, repo, version, release_path, release_type)
     if repo.name == "buildroot" and release_type == "external":
         latest_tag = latest_buildroot_external_tag(state, branch)
@@ -870,7 +970,7 @@ repos: List[RepoSpec] = [
         local_path=Path("./ot3-firmware"),
         default_branch="main",
         external_tag_pattern="v",
-        internal_tag_pattern="internal@",
+        internal_tag_pattern="ot3@",
     ),
     RepoSpec(
         name="oe-core",
@@ -878,7 +978,7 @@ repos: List[RepoSpec] = [
         local_path=Path("./oe-core"),
         default_branch="main",
         external_tag_pattern="v",
-        internal_tag_pattern="internal@",
+        internal_tag_pattern="ot3@",
     ),
     RepoSpec(
         name="opentrons",
@@ -999,7 +1099,7 @@ def default_release_type() -> str:
 
 def default_stability(release_path: ReleasePath) -> str:
     """Return the default stability choice for a robot path."""
-    return "stable" if release_path.name == "ot2" else "unstable"
+    return "stable"
 
 
 def default_release_version(release_path: ReleasePath, release_type: str) -> str:
@@ -1033,6 +1133,8 @@ def normalize_release_version(release_path: ReleasePath, release_type: str, vers
 
 def validate_stability(release_path: ReleasePath, stability: str) -> None:
     """Raise ValueError when stability is invalid for the selected robot path."""
+    if release_path.name == "flex" and stability == "unstable":
+        return
     allowed = OT2_STABILITIES if release_path.name == "ot2" else FLEX_STABILITIES
     if stability not in allowed:
         raise ValueError(f"Stability must be one of {', '.join(allowed)} for {release_path.label}")
@@ -1055,7 +1157,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--stability",
-        help="OT-2: stable, alpha, or beta. Flex: stable or unstable (alpha builds).",
+        help="OT-2: stable, alpha, or beta. Flex: stable, alpha, or beta (unstable maps to alpha).",
     )
     parser.add_argument(
         "--version",
@@ -1100,13 +1202,14 @@ def resolve_stability(release_path: ReleasePath, args: argparse.Namespace) -> st
         except ValueError as err:
             console.print(f"[red]{err}[/]")
             sys.exit(1)
-        return args.stability
+        return args.stability if release_path.name == "ot2" else normalize_flex_stability(args.stability)
 
     if args.non_interactive:
         return default_stability(release_path)
 
     choices = list(OT2_STABILITIES if release_path.name == "ot2" else FLEX_STABILITIES)
-    return Prompt.ask("Stability", choices=choices, default=default_stability(release_path))
+    selected = Prompt.ask("Stability", choices=choices, default=default_stability(release_path))
+    return selected if release_path.name == "ot2" else normalize_flex_stability(selected)
 
 
 def resolve_release_version(release_path: ReleasePath, release_type: str, args: argparse.Namespace) -> str:
@@ -1132,17 +1235,18 @@ ASSUMPTIONS_MARKDOWN = Markdown(
 
 - All tags we care about are *annotated*
   - example app tag: `git tag -a v8.4.0-alpha.8 -m 'chore(release): v8.4.0-alpha.8'`
-  - stack repo tags use their own name but reference the monorepo release in the message:
-    `git tag -a v0.10.1 -m 'chore(release): v8.4.0-alpha.8'`
-    - This gives the tag a message, creator, and date
+  - Flex coordinated releases use the **same tag** on `opentrons`, `oe-core`, and `ot3-firmware`
+    (for example `ot3@8.5.0-beta.0` or `v10.0.0-alpha.0`)
     - Then we use `git tag -l --sort=-creatordate` to get the latest tag
+    - Validate with `just validate-release-tags --tag <app-tag>` before pushing the app tag
 - Flex **external** releases use isolation branches named `chore_release-<version>` when present
   - suggested tag commands include `git checkout chore_release-<version>` before `git tag -a`
 - Flex **internal** and all **OT-2** releases tag default-branch HEAD
   (`edge` / `opentrons-develop` / `main`); no `chore_release` branch
-  - `opentrons`: `ot3@X.Y.Z` / `ot3@X.Y.Z-alpha.N`
-  - `oe-core`: `internal@X.Y.Z` / `internal@X.Y.Z-alpha.N`
-  - `ot3-firmware`: `internal@vN` integer counter
+  - Flex internal examples: `ot3@X.Y.Z`, `ot3@X.Y.Z-alpha.N`, `ot3@X.Y.Z-beta.N`
+  - Flex external examples: `vX.Y.Z`, `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`
+  - Internal prerelease trains on the same base: **beta** (VM isolation) then **alpha** (CRS) when both are active
+    - beta desktop builds overwrite alpha updater YAML; pair releases when both channels need updates
 """
 )
 
@@ -1239,16 +1343,11 @@ def print_tag_push_order_note(
         lines.append(f"{step}. [bold]{repo_name}[/] ({label}), if a new tag is needed")
         step += 1
     lines.append(f"{step}. [bold]{release_path.taggable_repo}[/] (app), always last")
-    if (
-        release_path.name == "flex"
-        and release_type == "external"
-        and version is not None
-    ):
+    if release_path.name == "flex" and release_type == "external" and version is not None:
         lines.extend(
             [
                 "",
-                "Flex external: run [bold]git checkout "
-                f"{chore_release_branch(version)}[/] in each repo before tagging.",
+                f"Flex external: run [bold]git checkout {chore_release_branch(version)}[/] in each repo before tagging.",
             ]
         )
     console.print()
@@ -1263,6 +1362,7 @@ def print_stack_repo_tag_section(
     release_type: str,
     stability: str,
     release_version: str,
+    app_tag: Optional[str] = None,
 ) -> None:
     """Print whether a stack repo needs a tag and the commands to push it."""
     repo = repo_by_name(repo_name)
@@ -1271,7 +1371,16 @@ def print_stack_repo_tag_section(
         console.print(f"[red]Missing sync state for {repo.name}[/]")
         return
 
-    plan = get_stack_repo_tag_plan(repo, state, version, release_type, stability, release_path, results)
+    plan = get_stack_repo_tag_plan(
+        repo,
+        state,
+        version,
+        release_type,
+        stability,
+        release_path,
+        results,
+        app_tag,
+    )
     print_tag_plan(repo, plan, release_version)
 
 
@@ -1282,10 +1391,13 @@ def print_track_builds_command(release_path: ReleasePath, app_tag: str) -> None:
     path = cast(RobotPath, release_path.name)
     track_command = track_builds_invocation(path, app_tag, wait=True)
     invalidate_command = f"just invalidate-cloudfront --path {path} --tag {app_tag}"
+    validate_command = f"just validate-release-tags --tag {app_tag}"
     console.print()
     console.print(
         Panel(
-            "After pushing the app tag above:\n\n"
+            "After pushing stack repo tags and before pushing the app tag:\n\n"
+            f"0. Verify coordinated tags exist locally:\n[bold cyan]{validate_command}[/]\n\n"
+            "After pushing the app tag:\n\n"
             f"1. Track app, kickoff, and robot OS CI:\n[bold cyan]{track_command}[/]\n\n"
             f"2. After builds finish, print CloudFront invalidation command:\n[bold cyan]{invalidate_command}[/]",
             title="Next steps",
@@ -1416,6 +1528,7 @@ def run_release(
             release_type,
             stability,
             release_version,
+            app_tag,
         )
 
     console.rule(f"{release_path.taggable_repo} (app) tag")

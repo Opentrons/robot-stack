@@ -45,6 +45,10 @@
 @assets-serve:
     uv run ./automation/publish_assets_pages.py --serve --open-browser
 
+# verify coordinated Flex release tag across opentrons, oe-core, and ot3-firmware
+@validate-release-tags *args:
+    uv run ./automation/validate_release_tags.py {{ args }}
+
 @ty:
     uv sync
     uv run ty check

@@ -6,7 +6,7 @@ Python tooling to plan Opentrons robot releases across the multi-repo stack (Fle
 
 Open this repo in [Cursor](https://cursor.com) and start a chat along these lines:
 
-> I need to do a new release for **Flex** (or **OT-2**). It will be **internal** or **external**, and **stable**, **alpha**, or **beta** (Flex internal/external use **stable** or **unstable** for alpha).
+> I need to do a new release for **Flex** (or **OT-2**). It will be **internal** or **external**, and **stable**, **alpha**, or **beta**.
 
 Workspace rules in `.cursor/rules/` teach the agent how to run the scripts below. It will sync local clones, print release analysis, and suggest copy-paste `git tag` / `git push` commands. **Nothing is pushed or invalidated automatically**; review the output, confirm you agree, then run the printed steps yourself.
 
@@ -14,9 +14,10 @@ Prompt Cursor as above and it will walk you through the full release in order, r
 
 1. **Plan tags** — runs `just go` to show what needs tags and the tag shape per repo.
 2. **Push tags** — prints `git tag` / `git push` commands for you to run (stack repos first, app last).
-3. **Track builds** — runs `just track-builds` after the app tag is pushed to surface app, kickoff, and robot OS workflow runs.
-4. **Verify builds** — reminds you to wait for CI and spot-check manifests if needed.
-5. **Invalidate CDN** — runs `just invalidate-cloudfront` to print the exact `aws cloudfront create-invalidation` command (distribution and paths) for your tag and channel.
+3. **Validate coordinated tags (Flex)** — runs `just validate-release-tags` to confirm the same tag exists in `opentrons`, `oe-core`, and `ot3-firmware` before you push the app tag.
+4. **Track builds** — runs `just track-builds` after the app tag is pushed to surface app, kickoff, and robot OS workflow runs.
+5. **Verify builds** — reminds you to wait for CI and spot-check manifests if needed.
+6. **Invalidate CDN** — runs `just invalidate-cloudfront` to print the exact `aws cloudfront create-invalidation` command (distribution and paths) for your tag and channel.
 
 ### TODO: release checklists
 
@@ -44,7 +45,9 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
   - `uv run just fix`
 - sync repos and inspect release state
   - `uv run just go`
-  - non-interactive example: `uv run just go --non-interactive --skip-assumptions --path flex --release-type internal --stability unstable`
+  - non-interactive example: `uv run just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0`
+- verify a coordinated Flex tag exists in all three stack repos (before pushing the app tag)
+  - `uv run just validate-release-tags --tag ot3@4.0.0-beta.0`
 - find GitHub Actions runs after pushing an app tag
   - `uv run just track-builds --path ot2 --tag internal@26.5.2801 --wait`
 - print a CloudFront invalidation command after builds finish
@@ -56,7 +59,7 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 
 | Path | Repos | App repo | Version scheme |
 |---|---|---|---|
-| **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Per-repo prefixes (`ot3@`, `internal@`, `v`; see below) |
+| **Flex** | `opentrons`, `oe-core`, `ot3-firmware` | `opentrons` | Coordinated `ot3@` / `v*` tags on all three repos (see below) |
 | **OT-2** | `opentrons-ot2`, `buildroot` | `opentrons-ot2` | Calendar semver for app + internal; buildroot external uses its own `vX.Y.Z` line |
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo. It is not included in release tables or tagging.
@@ -74,17 +77,35 @@ Push annotated tags in this order. Stack repos first, app monorepo last.
 | **Flex** | `ot3-firmware` (if needed) → `oe-core` (if needed) → `opentrons` (app, always last) |
 | **OT-2** | `buildroot` (if needed) → `opentrons-ot2` (app, always last) |
 
-### Flex semver
+### Flex semver (coordinated tags)
 
-Flex repos use different tag prefixes. In `just go`, Flex uses **stable/unstable** stability (unstable = alpha).
+Flex releases use the **same tag** on `opentrons`, `oe-core`, and `ot3-firmware`. The tag identifies which commit participated in that release, even when a stack repo did not change. Tag-based CI in `oe-core` (`build-refs`) resolves only that exact tag on each repo; missing tags fail instead of falling back to latest or default branch.
+
+In `just go`, Flex uses **stable**, **alpha**, or **beta** stability (legacy `unstable` maps to `alpha`). OT-2 tagging is unchanged.
 
 | Repo | Internal | External |
 |---|---|---|
-| `opentrons` | `ot3@X.Y.Z`, alpha `ot3@X.Y.Z-alpha.N` | `vX.Y.Z`, alpha `vX.Y.Z-alpha.N` |
-| `oe-core` | `internal@X.Y.Z`, alpha `internal@X.Y.Z-alpha.N` | `v0.X.Y` (independent line) |
-| `ot3-firmware` | `internal@vN` | `vN` |
+| `opentrons` (app) | `ot3@X.Y.Z`, `ot3@X.Y.Z-alpha.N`, `ot3@X.Y.Z-beta.N` | `vX.Y.Z`, `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N` |
+| `oe-core` (robot OS) | same coordinated tag as app | same coordinated tag as app |
+| `ot3-firmware` | same coordinated tag as app | same coordinated tag as app |
 
-For internal alpha builds, `go` coordinates oe-core alpha numbers with the next `ot3@X.Y.Z-alpha.N` on `opentrons`. Internal oe-core and app stable tags use the prompted base version; if that exact tag already exists on the branch, `go` suggests a patch bump.
+**Internal prerelease trains** (same `X.Y.Z` base, different stability suffix):
+
+| Train | Stability in `go` | Tag example | Typical use |
+|---|---|---|---|
+| VM isolation | `beta` | `ot3@4.0.0-beta.0` | Beta app channel; ship first when adopting coordinated tagging |
+| CRS | `alpha` | `ot3@4.0.0-alpha.4` | Alpha app channel; follow beta on the same base when both trains are active |
+
+Pair beta then alpha when both channels need updates in the same cycle: beta desktop builds overwrite alpha updater YAML metadata (`generateUpdatesFilesForAllChannels`).
+
+Before pushing the app tag, run `just validate-release-tags --tag <app-tag>`. `go` prints this in the Next steps panel.
+
+**Example (June 2026):** recent internal alphas used base `4.0.0` (`ot3@4.0.0-alpha.3` is the latest). The first coordinated internal release on that line is **`ot3@4.0.0-beta.0`** on all three repos.
+
+```bash
+just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0
+just validate-release-tags --tag ot3@4.0.0-beta.0
+```
 
 ### Track release builds
 
