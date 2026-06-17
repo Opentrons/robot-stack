@@ -49,6 +49,7 @@ known-first-party = ["automation"]
 
 [tool.ruff.lint.per-file-ignores]
 "automation/release_guides.py" = ["E501"]
+"automation/flex_release_strategy_docs.py" = ["E501"]
 
 [tool.ty.rules]
 unused-ignore-comment = "error"

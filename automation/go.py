@@ -69,6 +69,8 @@ class TagPlan:
     next_tag: Optional[str]
     branch: str
     reason: str
+    secondary_tags: Tuple[str, ...] = ()
+    existing_firmware_version_tag: Optional[str] = None
 
 
 OT3_FIRMWARE_EXTERNAL_TAG_RE = re.compile(r"^v(\d+)$")
@@ -582,18 +584,56 @@ def get_next_flex_app_tag_command(
     raise ValueError(f"Tag {release_version} already exists on {branch}")
 
 
-def max_ot3_firmware_tag_number(state: RepoState, branch: str, release_type: str) -> int:
-    """Return the highest integer firmware tag number merged into a branch."""
-    pattern = "v" if release_type == "external" else "internal@"
-    tag_re = OT3_FIRMWARE_EXTERNAL_TAG_RE if release_type == "external" else OT3_FIRMWARE_INTERNAL_TAG_RE
+def all_integer_firmware_version_numbers(repo: RepoSpec) -> List[int]:
+    """Return every integer vN firmware version tag number in the repo (globally unique)."""
+    if not (repo.local_path / ".git").exists():
+        return []
+
+    try:
+        tags = run_git_command(
+            ["tag", "-l", "v*", "--sort=-v:refname"],
+            cwd=repo.local_path,
+        ).splitlines()
+    except RuntimeError:
+        return []
+
     numbers: List[int] = []
-    for tag in state.branch_tags.get(branch, {}).get(pattern, []):
-        match = tag_re.match(tag)
+    for tag in tags:
+        match = OT3_FIRMWARE_EXTERNAL_TAG_RE.match(tag.strip())
         if match is not None:
             numbers.append(int(match.group(1)))
+    return numbers
+
+
+def integer_firmware_version_tags_on_commit(repo: RepoSpec, commit: str) -> List[str]:
+    """Return integer vN version tags already pointing at a commit."""
+    if not (repo.local_path / ".git").exists():
+        return []
+
+    try:
+        tags = run_git_command(["tag", "--points-at", commit], cwd=repo.local_path).splitlines()
+    except RuntimeError:
+        return []
+
+    version_tags = [tag.strip() for tag in tags if OT3_FIRMWARE_EXTERNAL_TAG_RE.match(tag.strip())]
+    return sorted(version_tags, key=lambda tag: int(tag[1:]))
+
+
+def get_next_ot3_firmware_version_tag(repo: RepoSpec) -> str:
+    """Suggest the next globally unique integer vN tag from all firmware version tags."""
+    numbers = all_integer_firmware_version_numbers(repo)
     if not numbers:
-        raise ValueError(f"No {pattern}* tags merged into branch")
-    return max(numbers)
+        return "v1"
+    return f"v{max(numbers) + 1}"
+
+
+def firmware_version_tag_for_release_commit(repo: RepoSpec, branch: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (existing vN on branch HEAD, next global vN) when a new version tag is needed."""
+    head = branch_head_commit(repo, branch)
+    existing_tags = integer_firmware_version_tags_on_commit(repo, head)
+    if existing_tags:
+        return existing_tags[-1], None
+    return None, get_next_ot3_firmware_version_tag(repo)
 
 
 def get_next_ot3_firmware_tag_command(
@@ -601,11 +641,9 @@ def get_next_ot3_firmware_tag_command(
     branch: str,
     release_type: str,
 ) -> str:
-    """Suggest the next ot3-firmware tag (vN or internal@vN) from branch tags."""
-    next_num = max_ot3_firmware_tag_number(state, branch, release_type) + 1
-    if release_type == "external":
-        return f"v{next_num}"
-    return f"internal@v{next_num}"
+    """Suggest the next ot3-firmware integer version tag (vN) from the whole repo."""
+    del state, branch, release_type
+    return get_next_ot3_firmware_version_tag(repo_by_name("ot3-firmware"))
 
 
 def flex_internal_alpha_from_opentrons(
@@ -678,9 +716,11 @@ def get_flex_coordinated_stack_tag_plan(
     app_tag: Optional[str],
 ) -> TagPlan:
     """Build a tag plan for oe-core or ot3-firmware using the opentrons release tag."""
+    from automation.flex_coordinated_tags import coordinated_tag_for_repo
+
     branch = release_branch_for_repo(state, repo, version, release_path, release_type)
-    coordinated = app_tag or compute_app_tag(release_path, results, version, release_type, stability)
-    if coordinated is None:
+    stack_tag = app_tag or compute_app_tag(release_path, results, version, release_type, stability)
+    if stack_tag is None:
         return TagPlan(
             needs_tag=False,
             latest_tag=latest_channel_tag(state, repo, branch, release_type),
@@ -689,6 +729,7 @@ def get_flex_coordinated_stack_tag_plan(
             reason="could not determine coordinated app tag",
         )
 
+    coordinated = coordinated_tag_for_repo(repo.name, stack_tag)
     latest_tag = latest_channel_tag(state, repo, branch, release_type)
     merged_tags = tags_merged_on_branch(state, branch)
     tag_exists = coordinated in merged_tags
@@ -706,12 +747,23 @@ def get_flex_coordinated_stack_tag_plan(
     else:
         reason = f"coordinated tag {coordinated} not on {branch} yet"
 
+    secondary_tags: Tuple[str, ...] = ()
+    existing_firmware_version_tag: Optional[str] = None
+    if repo.name == "ot3-firmware":
+        existing_firmware_version_tag, next_version_tag = firmware_version_tag_for_release_commit(repo, branch)
+        if next_version_tag is not None:
+            secondary_tags = (next_version_tag,)
+        elif existing_firmware_version_tag is not None:
+            reason = f"{reason}; reuse {existing_firmware_version_tag} on this commit"
+
     return TagPlan(
         needs_tag=True,
         latest_tag=latest_tag,
         next_tag=coordinated,
         branch=branch,
         reason=reason,
+        secondary_tags=secondary_tags,
+        existing_firmware_version_tag=existing_firmware_version_tag,
     )
 
 
@@ -808,6 +860,68 @@ def print_suggested_tag_block(
     )
 
 
+def print_firmware_coordination_tag_block(
+    coordination_tag: str,
+    release_version: str,
+    existing_version_tag: str,
+    *,
+    branch: Optional[str] = None,
+) -> None:
+    """Print ot3-firmware coordination-only tag commands when vN already exists on HEAD."""
+    command_lines = format_tag_commands(coordination_tag, release_version, branch=branch)
+    body = (
+        f"[bold cyan]{coordination_tag}[/] (CI coordination tag)\n"
+        f"[dim]Reuse existing {existing_version_tag} on this commit for cmake.[/]\n\n"
+    )
+    for cmd_label, cmd in command_lines:
+        body += f"[bold green]{cmd_label}:[/] {cmd}\n"
+    console.print()
+    console.print(
+        Panel(
+            body.rstrip(),
+            title="Suggested ot3-firmware tag (coordination only)",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
+
+
+def print_firmware_dual_tag_block(
+    coordination_tag: str,
+    version_tag: str,
+    release_version: str,
+    *,
+    branch: Optional[str] = None,
+) -> None:
+    """Print ot3-firmware dual-tag commands (integer vN plus coordination tag)."""
+    command_lines: List[Tuple[str, str]] = []
+    if branch is not None and is_chore_release_branch(branch):
+        command_lines.append(("Checkout", f"git checkout {branch}"))
+    command_lines.extend(
+        [
+            ("Create version", f"git tag -a {version_tag} -m 'Flex firmware {version_tag}'"),
+            (
+                "Create coordination",
+                f"git tag -a {coordination_tag} -m 'chore(release): {release_version}'",
+            ),
+            ("Verify", f"git log {coordination_tag} --oneline -n 10"),
+            ("Push", f"git push origin {version_tag} {coordination_tag}"),
+        ]
+    )
+    body = f"[bold cyan]{version_tag}[/] (cmake version integer)\n[bold cyan]{coordination_tag}[/] (CI coordination tag)\n\n"
+    for cmd_label, cmd in command_lines:
+        body += f"[bold green]{cmd_label}:[/] {cmd}\n"
+    console.print()
+    console.print(
+        Panel(
+            body.rstrip(),
+            title="Suggested ot3-firmware tags (dual-tag)",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
+
+
 def print_tag_plan(repo: RepoSpec, plan: TagPlan, release_version: str) -> None:
     """Print whether a repo needs a tag and the commands to create and push it."""
     if not plan.needs_tag:
@@ -820,6 +934,24 @@ def print_tag_plan(repo: RepoSpec, plan: TagPlan, release_version: str) -> None:
 
     if plan.next_tag is None:
         console.print("[red]Could not determine next tag[/]")
+        return
+
+    if repo.name == "ot3-firmware" and len(plan.secondary_tags) == 1:
+        print_firmware_dual_tag_block(
+            plan.next_tag,
+            plan.secondary_tags[0],
+            release_version,
+            branch=plan.branch,
+        )
+        return
+
+    if repo.name == "ot3-firmware" and plan.existing_firmware_version_tag is not None:
+        print_firmware_coordination_tag_block(
+            plan.next_tag,
+            release_version,
+            plan.existing_firmware_version_tag,
+            branch=plan.branch,
+        )
         return
 
     print_suggested_tag_block(f"{repo.name} tag", plan.next_tag, release_version, branch=plan.branch)
@@ -1235,10 +1367,13 @@ ASSUMPTIONS_MARKDOWN = Markdown(
 
 - All tags we care about are *annotated*
   - example app tag: `git tag -a v8.4.0-alpha.8 -m 'chore(release): v8.4.0-alpha.8'`
-  - Flex coordinated releases use the **same tag** on `opentrons`, `oe-core`, and `ot3-firmware`
-    (for example `ot3@8.5.0-beta.0` or `v10.0.0-alpha.0`)
-    - Then we use `git tag -l --sort=-creatordate` to get the latest tag
-    - Validate with `just validate-release-tags --tag <app-tag>` before pushing the app tag
+  - Flex coordinated releases share a stack tag on `opentrons` and `oe-core`
+    (`ot3@8.5.0-beta.0` internal, `v10.0.0-alpha.0` external)
+  - `ot3-firmware` uses the same `ot3@*` tag internally; external stack `v*` maps to `ex*`
+    (for example `v9.1.0-alpha.7` → `ex9.1.0-alpha.7`) plus an integer `vN` version tag on the same commit
+  - Integer `vN` is globally unique across the firmware repo; only create a new `vN` when the release
+    commit does not already have one. Retag-only releases need only the coordination tag (`ex*` or `ot3@*`)
+  - Validate with `just validate-release-tags --tag <app-tag>` before pushing the app tag
 - Flex **external** releases use isolation branches named `chore_release-<version>` when present
   - suggested tag commands include `git checkout chore_release-<version>` before `git tag -a`
 - Flex **internal** and all **OT-2** releases tag default-branch HEAD

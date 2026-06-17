@@ -65,6 +65,11 @@ ASSET_NAV: Final[Tuple[SiteLink, ...]] = tuple(link for group in PRODUCT_NAV for
 
 GUIDE_NAV: Final[Tuple[SiteLink, ...]] = tuple(link for group in PRODUCT_NAV for link in group.guide_links)
 
+FLEX_STRATEGY_NAV: Final[Tuple[SiteLink, ...]] = (
+    SiteLink("flex-coordinated-tags.html", "Coordinated tags"),
+    SiteLink("flex-release-sequencing.html", "Release sequencing"),
+)
+
 
 def robot_display_font_css() -> str:
     """Orbitron styling for robot product names (nav, index, asset pages)."""
@@ -118,7 +123,9 @@ def site_nav_css() -> str:
       font-size: 0.92rem;
       width: 100%;
       display: flex;
-      justify-content: center;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.65rem;
     }
     .nav-columns {
       display: grid;
@@ -126,6 +133,11 @@ def site_nav_css() -> str:
       column-gap: 3rem;
       justify-content: center;
       margin: 0 auto;
+    }
+    .nav-strategy-row {
+      display: flex;
+      justify-content: center;
+      width: 100%;
     }
     .nav-group {
       display: flex;
@@ -227,9 +239,14 @@ def render_site_header(current_page: str) -> str:
         )
 
     columns = f'<div class="nav-columns">{"".join(groups)}</div>'
+    strategy_row = (
+        f'<div class="nav-strategy-row">'
+        f'{_render_nav_block("Strategy", FLEX_STRATEGY_NAV, current_page)}'
+        f"</div>"
+    )
 
     return (
         f'<header class="site-header"><div class="site-header-inner">'
-        f'<nav class="site-nav" aria-label="Site">{columns}</nav>'
+        f'<nav class="site-nav" aria-label="Site">{columns}{strategy_row}</nav>'
         f"</div></header>"
     )

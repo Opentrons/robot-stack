@@ -360,17 +360,18 @@ def render_flex_external() -> str:
     body = f"""
     <p class="lede">Customer-facing Flex releases. App tags use a <code>v</code> prefix in
     <a href="https://github.com/Opentrons/opentrons">opentrons</a>.
-    Robot OS and firmware use the <strong>same coordinated tag</strong> in
-    <a href="https://github.com/Opentrons/oe-core">oe-core</a> and
-    <a href="https://github.com/Opentrons/ot3-firmware">ot3-firmware</a>.</p>
+    <a href="https://github.com/Opentrons/oe-core">oe-core</a> uses the same stack tag.
+    <a href="https://github.com/Opentrons/ot3-firmware">ot3-firmware</a> uses an <code>ex*</code>
+    coordination tag mapped from the stack <code>v*</code> tag, plus an integer <code>vN</code>
+    version tag on the same commit.</p>
 
     <h2>Stack repos</h2>
     <table>
       <thead><tr><th>Repo</th><th>Role</th><th>External tag pattern</th></tr></thead>
       <tbody>
         <tr><td><code>opentrons</code></td><td>App (taggable)</td><td><code>vX.Y.Z</code>, alpha <code>vX.Y.Z-alpha.N</code>, beta <code>vX.Y.Z-beta.N</code></td></tr>
-        <tr><td><code>oe-core</code></td><td>Flex robot OS</td><td>Same coordinated tag as app (e.g. <code>v10.0.0-beta.0</code>)</td></tr>
-        <tr><td><code>ot3-firmware</code></td><td>Flex firmware</td><td>Same coordinated tag as app</td></tr>
+        <tr><td><code>oe-core</code></td><td>Flex robot OS</td><td>Same stack tag as app (e.g. <code>v10.0.0-beta.0</code>)</td></tr>
+        <tr><td><code>ot3-firmware</code></td><td>Flex firmware</td><td><code>exX.Y.Z…</code> coordination tag + integer <code>vN</code> on same commit</td></tr>
       </tbody>
     </table>
 
@@ -391,9 +392,17 @@ def render_flex_external() -> str:
       <li><strong>Beta:</strong> increment <code>v9.1.0-beta.N</code> (VM isolation train).</li>
     </ul>
 
-    <h3>Robot OS (<code>oe-core</code>) and firmware (<code>ot3-firmware</code>)</h3>
-    <p>Coordinated Flex releases use the <strong>same tag</strong> on all three repos.
-    Before pushing the app tag, run
+    <h3>Robot OS (<code>oe-core</code>)</h3>
+    <p>Uses the same stack tag as the app (for example <code>v9.1.0-alpha.7</code>).</p>
+
+    <h3>Firmware (<code>ot3-firmware</code>)</h3>
+    <p>Dual-tag when the release commit does not already have an integer <code>vN</code> version tag.
+    CI checks out the <code>ex*</code> coordination tag; cmake reads the co-located <code>vN</code>.
+    Do not use semver <code>v*</code> as the firmware coordination tag.</p>
+    <pre><code>git tag -a v70 -m "Flex firmware v70"
+git tag -a ex9.1.0-alpha.7 -m "Coordinated release marker"
+git push origin v70 ex9.1.0-alpha.7</code></pre>
+    <p>Before pushing the app tag, run
     <code>just validate-release-tags --tag &lt;app-tag&gt;</code>.</p>
 
     {_tag_push_order_section("flex")}
@@ -430,9 +439,12 @@ def render_flex_external() -> str:
       </table>
       <p>Alpha and beta tags increment <code>.N</code> on a fixed base version during QA on
       <code>chore_release-*</code>. Stable external releases drop the prerelease segment entirely.</p>
-      <p><code>oe-core</code> and <code>ot3-firmware</code> use the <strong>same coordinated tag</strong>
-      as the app (for example <code>v9.1.0-beta.0</code> on all three repos). Validate with
-      <code>just validate-release-tags --tag &lt;app-tag&gt;</code> before pushing the app tag.</p>
+      <p><code>oe-core</code> uses the same stack tag as the app.
+      <code>ot3-firmware</code> uses <code>ex*</code> mapped from the stack tag (for example
+      <code>v9.1.0-beta.0</code> → <code>ex9.1.0-beta.0</code>) plus integer <code>vN</code>.
+      Validate with <code>just validate-release-tags --tag &lt;app-tag&gt;</code> before pushing
+      the app tag. See <a href="flex-coordinated-tags.html">coordinated tagging</a> and
+      <a href="flex-release-sequencing.html">release sequencing</a>.</p>
     </div>
     """
     return _wrap_page("flex-external.html", "external releases", body, robot_name="Flex")
@@ -453,7 +465,7 @@ def render_flex_internal() -> str:
       <tbody>
         <tr><td><code>opentrons</code></td><td>App (taggable)</td><td><code>ot3@X.Y.Z</code>, alpha <code>ot3@X.Y.Z-alpha.N</code>, beta <code>ot3@X.Y.Z-beta.N</code></td></tr>
         <tr><td><code>oe-core</code></td><td>Flex robot OS</td><td>Same coordinated tag as app (e.g. <code>ot3@X.Y.Z-beta.N</code>)</td></tr>
-        <tr><td><code>ot3-firmware</code></td><td>Flex firmware</td><td>Same coordinated tag as app</td></tr>
+        <tr><td><code>ot3-firmware</code></td><td>Flex firmware</td><td>Same <code>ot3@*</code> as app + integer <code>vN</code> on same commit</td></tr>
       </tbody>
     </table>
 
@@ -475,18 +487,18 @@ def render_flex_internal() -> str:
       <li><strong>Beta:</strong> increment <code>ot3@X.Y.Z-beta.N</code> (VM isolation train; Beta app channel).</li>
     </ul>
 
-    <h3>Robot OS (<code>oe-core</code>) and firmware (<code>ot3-firmware</code>)</h3>
-    <p>Coordinated Flex releases use the <strong>same tag</strong> on all three repos
-    (<code>opentrons</code>, <code>oe-core</code>, <code>ot3-firmware</code>). The tag marks
-    which commit participated in that release even when a repo did not change.</p>
-    <ul>
-      <li><strong>Stable:</strong> <code>ot3@X.Y.Z</code> on all three repos.</li>
-      <li><strong>Alpha:</strong> <code>ot3@X.Y.Z-alpha.N</code> on all three repos.</li>
-      <li><strong>Beta:</strong> <code>ot3@X.Y.Z-beta.N</code> on all three repos (VM isolation train).</li>
-    </ul>
+    <h3>Robot OS (<code>oe-core</code>)</h3>
+    <p>Uses the same <code>ot3@*</code> stack tag as the app.</p>
+
+    <h3>Firmware (<code>ot3-firmware</code>)</h3>
+    <p>Tag the coordination marker on every release. Add a new integer <code>vN</code> only when
+    the release commit does not already have one; <code>vN</code> must be globally unique in the
+    firmware repo.</p>
+    <pre><code>git tag -a v70 -m "Flex firmware v70"
+git tag -a ot3@4.0.0-beta.0 -m "Coordinated release marker"
+git push origin v70 ot3@4.0.0-beta.0</code></pre>
     <p>Before pushing the app tag, run
-    <code>just validate-release-tags --tag &lt;app-tag&gt;</code> to confirm all three
-    local clones have the tag.</p>
+    <code>just validate-release-tags --tag &lt;app-tag&gt;</code>.</p>
 
     {_tag_push_order_section("flex")}
 
@@ -512,8 +524,11 @@ def render_flex_internal() -> str:
       <h2>Alpha and beta on Flex internal</h2>
       <p>In <code>just go</code>, choose <strong>Release type: internal</strong> and
       <strong>Stability: alpha</strong> or <strong>beta</strong>.</p>
-      <p>Both trains use the <strong>same coordinated tag</strong> on all three repos. Typical
-      pairing on one <code>X.Y.Z</code> base:</p>
+      <p>Stack tags on <code>opentrons</code> and <code>oe-core</code> match the app.
+      <code>ot3-firmware</code> uses the same <code>ot3@*</code> coordination tag plus integer
+      <code>vN</code>. Validate with <code>just validate-release-tags --tag &lt;app-tag&gt;</code>.
+      See <a href="flex-coordinated-tags.html">coordinated tagging</a> and
+      <a href="flex-release-sequencing.html">release sequencing</a>.</p>
       <table>
         <thead><tr><th>Train</th><th>Stability</th><th>Tag example</th><th>Notes</th></tr></thead>
         <tbody>
@@ -523,7 +538,9 @@ def render_flex_internal() -> str:
         </tbody>
       </table>
       <p>When both channels need updates in the same cycle, ship <strong>beta before alpha</strong>:
-      beta desktop builds overwrite alpha updater YAML metadata.</p>
+      beta desktop builds overwrite alpha updater YAML metadata. See
+      <a href="flex-release-sequencing.html">Flex release sequencing</a> and
+      <a href="flex-coordinated-tags.html">coordinated tagging reference</a>.</p>
       <p>Before pushing the app tag, run
       <code>just validate-release-tags --tag &lt;app-tag&gt;</code>.</p>
     </div>
@@ -721,12 +738,19 @@ def render_ot2_internal() -> str:
 
 def publish_release_guides(output_dir: Path) -> None:
     """Write all release guide HTML files under output_dir."""
+    from automation.flex_release_strategy_docs import (
+        render_flex_coordinated_tags_page,
+        render_flex_release_sequencing_page,
+    )
+
     output_dir.mkdir(parents=True, exist_ok=True)
     pages = {
         "flex-external.html": render_flex_external(),
         "flex-internal.html": render_flex_internal(),
         "ot2-external.html": render_ot2_external(),
         "ot2-internal.html": render_ot2_internal(),
+        "flex-coordinated-tags.html": render_flex_coordinated_tags_page(),
+        "flex-release-sequencing.html": render_flex_release_sequencing_page(),
     }
     for filename, content in pages.items():
         path = output_dir / filename

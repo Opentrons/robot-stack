@@ -14,7 +14,7 @@ Prompt Cursor as above and it will walk you through the full release in order, r
 
 1. **Plan tags** — runs `just go` to show what needs tags and the tag shape per repo.
 2. **Push tags** — prints `git tag` / `git push` commands for you to run (stack repos first, app last).
-3. **Validate coordinated tags (Flex)** — runs `just validate-release-tags` to confirm the same tag exists in `opentrons`, `oe-core`, and `ot3-firmware` before you push the app tag.
+3. **Validate coordinated tags (Flex)** — runs `just validate-release-tags` to confirm stack tags on `opentrons`/`oe-core`, the mapped `ex*`/`ot3@` coordination tag plus integer `vN` on `ot3-firmware`, before you push the app tag.
 4. **Track builds** — runs `just track-builds` after the app tag is pushed to surface app, kickoff, and robot OS workflow runs.
 5. **Verify builds** — reminds you to wait for CI and spot-check manifests if needed.
 6. **Invalidate CDN** — runs `just invalidate-cloudfront` to print the exact `aws cloudfront create-invalidation` command (distribution and paths) for your tag and channel.
@@ -79,15 +79,34 @@ Push annotated tags in this order. Stack repos first, app monorepo last.
 
 ### Flex semver (coordinated tags)
 
-Flex releases use the **same tag** on `opentrons`, `oe-core`, and `ot3-firmware`. The tag identifies which commit participated in that release, even when a stack repo did not change. Tag-based CI in `oe-core` (`build-refs`) resolves only that exact tag on each repo; missing tags fail instead of falling back to latest or default branch.
+Flex releases use coordinated stack tags on `opentrons` and `oe-core`. `ot3-firmware` uses the same `ot3@*` tag internally; for external releases, semver `v*` stack tags map to `ex*` on firmware (see [oe-core PR #329](https://github.com/Opentrons/oe-core/pull/329)). Do not place semver `v*` coordination tags on `ot3-firmware`: they break cmake `git describe --match=v*`.
+
+Every firmware release commit needs a coordination tag (`ot3@*` or `ex*`). Add a new integer **`vN` version tag** only when that commit does not already have one; `vN` must be globally unique across the firmware repo. CI checks out the coordination tag; cmake reads the co-located `vN`.
+
+Tag-based CI in `oe-core` (`build-refs`) resolves only the expected tag on each repo; missing tags fail instead of falling back to latest or default branch.
 
 In `just go`, Flex uses **stable**, **alpha**, or **beta** stability (legacy `unstable` maps to `alpha`). OT-2 tagging is unchanged.
 
 | Repo | Internal | External |
 |---|---|---|
 | `opentrons` (app) | `ot3@X.Y.Z`, `ot3@X.Y.Z-alpha.N`, `ot3@X.Y.Z-beta.N` | `vX.Y.Z`, `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N` |
-| `oe-core` (robot OS) | same coordinated tag as app | same coordinated tag as app |
-| `ot3-firmware` | same coordinated tag as app | same coordinated tag as app |
+| `oe-core` (robot OS) | same stack tag as app | same stack tag as app |
+| `ot3-firmware` | same `ot3@*` tag as app + integer `vN` | `exX.Y.Z…` (from `vX.Y.Z…`) + integer `vN` |
+
+**External firmware example** (stack `v9.1.0-alpha.7`):
+
+```bash
+# ot3-firmware only:
+git tag -a v70 -m "Flex firmware v70"
+git tag -a ex9.1.0-alpha.7 -m "Coordinated release marker"
+git push origin v70 ex9.1.0-alpha.7
+
+# opentrons / oe-core:
+git tag -a v9.1.0-alpha.7 -m "Coordinated release marker"
+git push origin v9.1.0-alpha.7
+```
+
+**Internal firmware example** (stack `ot3@4.0.0-beta.0`): same `ot3@*` on all three repos plus `vN` on firmware.
 
 **Internal prerelease trains** (same `X.Y.Z` base, different stability suffix):
 
@@ -100,7 +119,7 @@ Pair beta then alpha when both channels need updates in the same cycle: beta des
 
 Before pushing the app tag, run `just validate-release-tags --tag <app-tag>`. `go` prints this in the Next steps panel.
 
-**Example (June 2026):** recent internal alphas used base `4.0.0` (`ot3@4.0.0-alpha.3` is the latest). The first coordinated internal release on that line is **`ot3@4.0.0-beta.0`** on all three repos.
+**Example (June 2026):** recent internal alphas used base `4.0.0` (`ot3@4.0.0-alpha.3` is the latest). The first coordinated internal release on that line is **`ot3@4.0.0-beta.0`** on opentrons/oe-core, plus **`ot3@4.0.0-beta.0`** and the next **`vN`** on firmware.
 
 ```bash
 just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0

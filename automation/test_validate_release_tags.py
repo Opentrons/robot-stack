@@ -7,10 +7,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from automation.flex_coordinated_tags import (
+    is_firmware_version_tag,
+    normalize_tag,
+    stack_coordinated_tag_to_firmware_tag,
+)
 from automation.validate_release_tags import (
     check_tag_in_repo,
-    is_flex_coordinated_tag,
-    normalize_tag,
+    is_flex_stack_coordination_tag,
 )
 
 
@@ -28,16 +32,26 @@ class NormalizeTagTests(unittest.TestCase):
 
 
 class CoordinatedTagSchemeTests(unittest.TestCase):
-    """is_flex_coordinated_tag recognizes ot3@ and v* tags."""
+    """is_flex_stack_coordination_tag recognizes ot3@ and external v* tags."""
 
     def test_internal_tag(self) -> None:
-        self.assertTrue(is_flex_coordinated_tag("ot3@8.5.0-beta.0"))
+        self.assertTrue(is_flex_stack_coordination_tag("ot3@8.5.0-beta.0"))
 
     def test_external_tag(self) -> None:
-        self.assertTrue(is_flex_coordinated_tag("v10.0.0-alpha.0"))
+        self.assertTrue(is_flex_stack_coordination_tag("v10.0.0-alpha.0"))
+
+    def test_firmware_integer_not_stack_tag(self) -> None:
+        self.assertFalse(is_flex_stack_coordination_tag("v70"))
+        self.assertTrue(is_firmware_version_tag("v70"))
 
     def test_legacy_internal_prefix_rejected(self) -> None:
-        self.assertFalse(is_flex_coordinated_tag("internal@8.5.0"))
+        self.assertFalse(is_flex_stack_coordination_tag("internal@8.5.0"))
+
+    def test_external_maps_to_ex_on_firmware(self) -> None:
+        self.assertEqual(
+            stack_coordinated_tag_to_firmware_tag("v9.1.0-alpha.7"),
+            "ex9.1.0-alpha.7",
+        )
 
 
 class CheckTagInRepoTests(unittest.TestCase):

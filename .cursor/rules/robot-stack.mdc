@@ -78,23 +78,24 @@ External tags use a `v` prefix; internal tags use `internal@`.
 | **Flex external** | `chore_release-<version>` when present, else default branch | Highest `chore_release-X.Y.Z` on `opentrons`, fallback latest `v*` tag base |
 | **OT-2 internal / external** | Default branch HEAD (`opentrons-ot2`: `edge`, `buildroot`: `opentrons-develop`) | Calendar semver for app + internal (`YY.M.DNN` internal, `YY.M.N` external app); buildroot external patch bump from latest traditional `v*` tag |
 
-Internal tags: `ot3@` / `v*` on **all three** Flex repos (`opentrons`, `oe-core`, `ot3-firmware`) for coordinated releases. OT-2 app and buildroot share `internal@` calendar tags. OT-2 external app uses calendar `vYY.M.N`; buildroot external uses independent traditional `vX.Y.Z`.
+Internal tags: coordinated `ot3@` / `v*` on `opentrons` and `oe-core`. `ot3-firmware` uses the same `ot3@*` internally; external stack `v*` maps to `ex*` on firmware plus integer `vN` on the same commit. OT-2 app and buildroot share `internal@` calendar tags. OT-2 external app uses calendar `vYY.M.N`; buildroot external uses independent traditional `vX.Y.Z`.
 
 ### Flex semver tagging
 
-Flex uses **coordinated tags**: the same tag on `opentrons`, `oe-core`, and `ot3-firmware`. In `just go`, Flex prompts for **Stability: stable/alpha/beta** (legacy `unstable` maps to `alpha`).
+Flex uses **coordinated stack tags** on `opentrons` and `oe-core`. In `just go`, Flex prompts for **Stability: stable/alpha/beta** (legacy `unstable` maps to `alpha`).
 
 | Repo | Internal | External |
 |---|---|---|
 | `opentrons` (app) | `ot3@X.Y.Z`, alpha `ot3@X.Y.Z-alpha.N`, beta `ot3@X.Y.Z-beta.N` | `vX.Y.Z`, alpha `vX.Y.Z-alpha.N`, beta `vX.Y.Z-beta.N` |
-| `oe-core` (robot OS) | same coordinated tag as app | same coordinated tag as app |
-| `ot3-firmware` | same coordinated tag as app | same coordinated tag as app |
+| `oe-core` (robot OS) | same stack tag as app | same stack tag as app |
+| `ot3-firmware` | same `ot3@*` as app + integer `vN` | `exX.Y.Z…` (from stack `v*`) + integer `vN` |
 
 Tag suggestion rules in `automation/go.py`:
 
 - **App (`opentrons`):** base `X.Y.Z` comes from the prompted release version. Stable: `ot3@X.Y.Z` / `vX.Y.Z` if missing, else patch bump. Alpha/beta: increment prerelease `.N` from branch tags.
-- **Robot OS (`oe-core`) and firmware (`ot3-firmware`):** same tag as the app. Retag unchanged commits when a repo did not change.
-- **Before pushing the app tag:** run `just validate-release-tags --tag <app-tag>` to confirm all three local clones have the tag. `oe-core` `build-refs` also requires the matching tag on each repo for tag dispatches (no `:latest:` fallback).
+- **Robot OS (`oe-core`):** same stack tag as the app. Retag unchanged commits when the repo did not change.
+- **Firmware (`ot3-firmware`):** coordination tag is `ot3@*` (internal) or `ex*` mapped from stack `v*` (external). Integer `vN` is globally unique in the firmware repo; suggest a new `vN` only when the release commit does not already have one. Retag-only releases need only the coordination tag.
+- **Before pushing the app tag:** run `just validate-release-tags --tag <app-tag>`. `oe-core` `build-refs` maps external stack tags to `ex*` on firmware ([PR #329](https://github.com/Opentrons/oe-core/pull/329)); missing tags fail (no `:latest:` fallback).
 
 **Internal prerelease trains** (Flex only; OT-2 unchanged): on the same `X.Y.Z` base, **beta** (`ot3@X.Y.Z-beta.N`) serves the VM isolation train and **alpha** (`ot3@X.Y.Z-alpha.N`) serves CRS. When both channels need updates in one cycle, ship beta before alpha (beta desktop builds overwrite alpha updater YAML).
 
@@ -260,14 +261,14 @@ just invalidate-cloudfront --non-interactive --path ot2 --tag internal@26.5.2601
 
 ### `just validate-release-tags` (`automation/validate_release_tags.py`)
 
-Verifies a coordinated Flex release tag exists locally in `opentrons`, `oe-core`, and `ot3-firmware`. Read-only unless `--fetch` (runs `git fetch --tags` in each clone).
+Verifies coordinated Flex release tags locally. Checks stack tags on `opentrons` and `oe-core`, the mapped coordination tag on `ot3-firmware` (`ex*` for external stack `v*`, same `ot3@*` for internal), and an integer `vN` version tag on the same firmware commit. Read-only unless `--fetch` (runs `git fetch --tags` in each clone).
 
 | Flag | Purpose |
 |---|---|
-| `--tag` | Release tag to verify (required; e.g. `ot3@8.5.0-beta.0`, `v10.0.0-alpha.0`) |
+| `--tag` | Stack release tag (required; e.g. `ot3@8.5.0-beta.0`, `v10.0.0-alpha.0`) |
 | `--fetch` | Fetch tags from origin before checking |
 
-**Exit codes:** `0` if tag present in all three repos; `1` if any missing or fetch fails.
+**Exit codes:** `0` if all checks pass; `1` if any missing or fetch fails.
 
 ```bash
 just validate-release-tags --tag ot3@8.5.0-beta.1
