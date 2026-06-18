@@ -68,12 +68,14 @@ def _release_branch_section(path: str, channel: str) -> str:
     if path == "flex" and channel == "external":
         return f"""
     <h2>Release branch</h2>
-    <p>Flex <strong>external</strong> prefers isolation branches
+    <p>Flex <strong>external</strong> defaults to isolation branches
     <code>chore_release-&lt;version&gt;</code> (for example <code>chore_release-9.1.0</code>, without a
     <code>v</code> prefix in the branch name) when that branch exists on the remote after
     <code>just go</code> syncs repos. Otherwise <code>go</code> uses each repo&apos;s default branch.
-    Suggested tag commands include <code>git checkout chore_release-&lt;version&gt;</code> before
-    <code>git tag -a</code> when that branch is the release branch.</p>
+    Override with <code>--app-branch</code> and <code>--stack-branch REPO=BRANCH</code> when a flavor
+    ships from a different branch (for example <code>chore_release-10.0.0-beta</code>).
+    Suggested tag commands include <code>git checkout &lt;release-branch&gt;</code> before
+    <code>git tag -a</code> when that branch is not the repo default.</p>
     {branches}
     <p>Default version inference: highest <code>chore_release-X.Y.Z</code> on <code>opentrons</code>,
     with fallback to the latest merged <code>v*</code> tag base.</p>
@@ -81,10 +83,12 @@ def _release_branch_section(path: str, channel: str) -> str:
     if path == "flex":
         return f"""
     <h2>Release branch</h2>
-    <p>Flex <strong>internal</strong> tags <strong>default-branch HEAD</strong>. No
-    <code>chore_release</code> branch is used.</p>
+    <p>Flex <strong>internal</strong> defaults to each repo&apos;s default branch
+    (<code>opentrons</code>: <code>edge</code>; <code>oe-core</code> / <code>ot3-firmware</code>:
+    <code>main</code>). Override with <code>--app-branch</code> and
+    <code>--stack-branch REPO=BRANCH</code> when a release flavor ships from a named branch.</p>
     {branches}
-    <p>Default version inference: highest <code>ot3@X.Y.Z</code> base merged into <code>edge</code>.</p>
+    <p>Default version inference: highest <code>ot3@X.Y.Z</code> base in the app repo tag catalog.</p>
     """
     return f"""
     <h2>Release branch</h2>
@@ -99,18 +103,21 @@ def _tag_need_section() -> str:
     return """
     <h2>When does <code>just go</code> say a new tag is needed?</h2>
     <p>For each repo, <code>automation/go.py</code> uses the <strong>release branch</strong> described
-    above, finds the newest <strong>annotated</strong> tag for the selected channel on that branch
-    (sorted by creator date, merged into the branch), and compares the branch tip commit.</p>
+    above and the coordinated stack tag for the selected stability lane. It compares branch tip commit
+    to whether that coordinated tag already points at HEAD.</p>
     <div class="panel">
-      <p><strong>New tag needed</strong> when the branch tip commit is not the same commit as
-      that latest channel tag.</p>
-      <p><strong>No new tag needed</strong> when branch HEAD already matches the latest channel tag.</p>
+      <p><strong>New tag needed</strong> when the coordinated tag for this release is missing on the
+      branch or branch HEAD has moved since that tag.</p>
+      <p><strong>No new tag needed</strong> when branch HEAD already matches the coordinated tag.</p>
     </div>
-    <p>Tags must be annotated (<code>git tag -a … -m 'chore(release): …'</code>) so
-    <code>git tag -l --sort=-creatordate</code> reflects real release order. Stack repo tag messages
-    often reference the monorepo release version. Flex external tag blocks also print
-    <code>git checkout chore_release-&lt;version&gt;</code> so operators tag the isolation branch, not
-    default-branch HEAD.</p>
+    <p>Flex app tag numbers come from the <strong>app monorepo tag catalog</strong>
+    (<code>opentrons</code> or <code>opentrons-ot2</code>). At one semver base, stable, alpha, and beta
+    are <strong>independent lanes</strong> (for example <code>ot3@4.0.0-alpha.3</code> and
+    <code>ot3@4.0.0-beta.0</code> can coexist). Change logs compare against the prior tag in the
+    <strong>same lane</strong> on the release branch.</p>
+    <p>Tags must be annotated (<code>git tag -a … -m 'chore(release): …'</code>).
+    When the release branch differs from the repo default, tag blocks print
+    <code>git checkout &lt;release-branch&gt;</code> first.</p>
     <p>Pushing a tag triggers CI builds in the tagged repo. The app monorepo tag drives app
     artifacts; stack repo tags drive robot OS and firmware builds.</p>
     """
@@ -437,14 +444,16 @@ git push origin v70 ex9.1.0-alpha.7</code></pre>
           <tr><td>Beta</td><td><code>v9.1.0-beta.0</code>, <code>v9.1.0-beta.1</code>, …</td><td><code>beta.yml</code> (+ mac/linux)</td></tr>
         </tbody>
       </table>
-      <p>Alpha and beta tags increment <code>.N</code> on a fixed base version during QA on
-      <code>chore_release-*</code>. Stable external releases drop the prerelease segment entirely.</p>
+      <p>Alpha and beta are <strong>independent lanes</strong> at the same semver base; each
+      increments its own <code>.N</code> from the app repo tag catalog. Compare ranges use the
+      prior tag in the same lane merged into the release branch. Stable external releases drop the
+      prerelease segment entirely.</p>
       <p><code>oe-core</code> uses the same stack tag as the app.
       <code>ot3-firmware</code> uses <code>ex*</code> mapped from the stack tag (for example
       <code>v9.1.0-beta.0</code> → <code>ex9.1.0-beta.0</code>) plus integer <code>vN</code>.
       Validate with <code>just validate-release-tags --tag &lt;app-tag&gt;</code> before pushing
       the app tag. See <a href="flex-coordinated-tags.html">coordinated tagging</a> and
-      <a href="flex-release-sequencing.html">release sequencing</a>.</p>
+      <a href="release-channel-hierarchy.html">release channel hierarchy</a>.</p>
     </div>
     """
     return _wrap_page("flex-external.html", "external releases", body, robot_name="Flex")
@@ -480,11 +489,14 @@ def render_flex_internal() -> str:
     <strong>alpha</strong>, or <strong>beta</strong>.</p>
     <h3>App (<code>opentrons</code>)</h3>
     <ul>
-      <li><strong>Stable:</strong> <code>ot3@X.Y.Z</code> if not already on the branch; otherwise patch bump
+      <li><strong>Stable:</strong> <code>ot3@X.Y.Z</code> if not already in the app repo; otherwise patch bump
       (e.g. <code>ot3@8.5.0</code> → <code>ot3@8.5.1</code>).</li>
-      <li><strong>Alpha:</strong> increment <code>ot3@X.Y.Z-alpha.N</code> from existing tags on the branch
-      (first alpha is <code>ot3@8.5.0-alpha.0</code>).</li>
-      <li><strong>Beta:</strong> increment <code>ot3@X.Y.Z-beta.N</code> (VM isolation train; Beta app channel).</li>
+      <li><strong>Alpha:</strong> increment <code>ot3@X.Y.Z-alpha.N</code> from existing alpha tags at that base
+      in the app repo (first alpha is <code>ot3@8.5.0-alpha.0</code>).</li>
+      <li><strong>Beta:</strong> increment <code>ot3@X.Y.Z-beta.N</code> from existing beta tags at that base.
+      Alpha and beta are independent lanes: <code>ot3@4.0.0-alpha.3</code> and
+      <code>ot3@4.0.0-beta.0</code> can coexist.</li>
+      <li>Change logs compare against the prior tag in the <strong>same lane</strong> on the release branch.</li>
     </ul>
 
     <h3>Robot OS (<code>oe-core</code>)</h3>
@@ -523,23 +535,27 @@ git push origin v70 ot3@4.0.0-beta.0</code></pre>
     <div class="alpha-beta">
       <h2>Alpha and beta on Flex internal</h2>
       <p>In <code>just go</code>, choose <strong>Release type: internal</strong> and
-      <strong>Stability: alpha</strong> or <strong>beta</strong>.</p>
+      <strong>Stability: alpha</strong> or <strong>beta</strong>. At one semver base, alpha and beta
+      are <strong>independent release flavors</strong> with separate counters, not a strict
+      promote-alpha-to-beta ladder.</p>
       <p>Stack tags on <code>opentrons</code> and <code>oe-core</code> match the app.
       <code>ot3-firmware</code> uses the same <code>ot3@*</code> coordination tag plus integer
       <code>vN</code>. Validate with <code>just validate-release-tags --tag &lt;app-tag&gt;</code>.
       See <a href="flex-coordinated-tags.html">coordinated tagging</a> and
-      <a href="flex-release-sequencing.html">release sequencing</a>.</p>
+      <a href="release-channel-hierarchy.html">release channel hierarchy</a>.</p>
       <table>
         <thead><tr><th>Train</th><th>Stability</th><th>Tag example</th><th>Notes</th></tr></thead>
         <tbody>
-          <tr><td>VM isolation</td><td>beta</td><td><code>ot3@4.0.0-beta.0</code></td><td>Beta app channel; first coordinated tag on a new base</td></tr>
-          <tr><td>CRS</td><td>alpha</td><td><code>ot3@4.0.0-alpha.4</code></td><td>Alpha app channel; increment <code>.N</code> on the branch</td></tr>
+          <tr><td>VM isolation</td><td>beta</td><td><code>ot3@4.0.0-beta.0</code></td><td>Beta app channel; beta counter at the base</td></tr>
+          <tr><td>CRS</td><td>alpha</td><td><code>ot3@4.0.0-alpha.4</code></td><td>Alpha app channel; alpha counter at the base (can coexist with beta)</td></tr>
           <tr><td>Stable</td><td>stable</td><td><code>ot3@4.0.0</code></td><td>Same prompted base version</td></tr>
         </tbody>
       </table>
-      <p>When both channels need updates in the same cycle, ship <strong>beta before alpha</strong>:
-      beta desktop builds overwrite alpha updater YAML metadata. See
-      <a href="flex-release-sequencing.html">Flex release sequencing</a> and
+      <p>When both channels need updates in the <strong>same release cycle</strong>, ship
+      <strong>beta before alpha</strong> so beta desktop builds do not leave alpha updater YAML
+      pointing at the wrong build. That rule is for updater metadata only; alpha and beta remain
+      independent tag lanes at the same semver base. See
+      <a href="release-channel-hierarchy.html">release channel hierarchy</a> and
       <a href="flex-coordinated-tags.html">coordinated tagging reference</a>.</p>
       <p>Before pushing the app tag, run
       <code>just validate-release-tags --tag &lt;app-tag&gt;</code>.</p>
@@ -638,7 +654,9 @@ def render_ot2_external() -> str:
       </table>
       <p>Alpha and beta share the monthly build counter <code>N</code> with stable releases.
       After <code>v26.5.0</code> stable, the next alpha is <code>v26.5.1-alpha.0</code>, not
-      <code>v26.5.0-alpha.0</code>. QA cycles on the same base increment the prerelease number only.</p>
+      <code>v26.5.0-alpha.0</code>. QA cycles on the same base increment the prerelease number only.
+      See <a href="release-channel-hierarchy.html">release channel hierarchy</a> for how alpha, beta,
+      and stable updater YAMLs interact.</p>
     </div>
     """
     return _wrap_page("ot2-external.html", "external releases", body, robot_name="OT-2")
@@ -730,7 +748,9 @@ def render_ot2_internal() -> str:
       <p>Internal alpha/beta differs from external OT-2: external uses numbered prereleases
       (<code>-alpha.0</code>, <code>-alpha.1</code>) on the monthly build base for that release, while internal uses
       unnumbered <code>-alpha</code> / <code>-beta</code> suffixes combined with the
-      day/build patch scheme.</p>
+      day/build patch scheme. See
+      <a href="release-channel-hierarchy.html">release channel hierarchy</a> for updater channel
+      behavior on Flex and OT-2.</p>
     </div>
     """
     return _wrap_page("ot2-internal.html", "internal releases", body, robot_name="OT-2")
@@ -740,7 +760,7 @@ def publish_release_guides(output_dir: Path) -> None:
     """Write all release guide HTML files under output_dir."""
     from automation.flex_release_strategy_docs import (
         render_flex_coordinated_tags_page,
-        render_flex_release_sequencing_page,
+        render_release_channel_hierarchy_page,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -750,7 +770,7 @@ def publish_release_guides(output_dir: Path) -> None:
         "ot2-external.html": render_ot2_external(),
         "ot2-internal.html": render_ot2_internal(),
         "flex-coordinated-tags.html": render_flex_coordinated_tags_page(),
-        "flex-release-sequencing.html": render_flex_release_sequencing_page(),
+        "release-channel-hierarchy.html": render_release_channel_hierarchy_page(),
     }
     for filename, content in pages.items():
         path = output_dir / filename

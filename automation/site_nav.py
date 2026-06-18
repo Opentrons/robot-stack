@@ -67,7 +67,7 @@ GUIDE_NAV: Final[Tuple[SiteLink, ...]] = tuple(link for group in PRODUCT_NAV for
 
 FLEX_STRATEGY_NAV: Final[Tuple[SiteLink, ...]] = (
     SiteLink("flex-coordinated-tags.html", "Coordinated tags"),
-    SiteLink("flex-release-sequencing.html", "Release sequencing"),
+    SiteLink("release-channel-hierarchy.html", "Channel hierarchy"),
 )
 
 
@@ -239,11 +239,7 @@ def render_site_header(current_page: str) -> str:
         )
 
     columns = f'<div class="nav-columns">{"".join(groups)}</div>'
-    strategy_row = (
-        f'<div class="nav-strategy-row">'
-        f'{_render_nav_block("Strategy", FLEX_STRATEGY_NAV, current_page)}'
-        f"</div>"
-    )
+    strategy_row = f'<div class="nav-strategy-row">{_render_nav_block("Strategy", FLEX_STRATEGY_NAV, current_page)}</div>'
 
     return (
         f'<header class="site-header"><div class="site-header-inner">'

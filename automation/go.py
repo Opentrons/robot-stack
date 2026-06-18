@@ -35,6 +35,17 @@ from automation.ot2_tag_allocation import (
     allocate_next_internal_tag,
     infer_ot2_external_base_version,
 )
+from automation.release_branch_config import ReleaseBranchConfig, build_release_branch_config
+from automation.release_tag_catalog import (
+    FlexStability,
+    NextFlexTagSuggestion,
+    StabilityLatestTags,
+    flex_tags_in_lane,
+    latest_merged_flex_tag_for_stability,
+    latest_merged_ot2_tag_for_stability,
+    latest_tags_by_stability_flex,
+    latest_tags_by_stability_ot2,
+)
 
 console = Console(log_time=False)
 
@@ -58,6 +69,7 @@ class RepoSpec:
 class RepoState:
     branch_tags: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
     overall_tags: Dict[str, Optional[str]] = field(default_factory=dict)
+    channel_tags: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -100,11 +112,42 @@ def chore_release_branch(version: str) -> str:
     return f"chore_release-{version.lstrip('v')}"
 
 
-def release_on_default_branch(release_path: ReleasePath, release_type: str) -> bool:
-    """Return True when releases tag default-branch HEAD instead of chore_release."""
+def release_on_default_branch(
+    release_path: ReleasePath,
+    release_type: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
+) -> bool:
+    """Return True when no branch override applies and defaults are used."""
+    if branch_config is not None:
+        if branch_config.app_branch is not None or branch_config.stack_branches:
+            return False
     if release_path.name == "ot2":
         return True
     return release_path.name == "flex" and release_type == "internal"
+
+
+def resolve_release_branch(
+    repo: RepoSpec,
+    version: str,
+    release_path: ReleasePath,
+    release_type: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
+) -> str:
+    """Return the branch to tag for a repo without requiring synced state."""
+    if branch_config is not None:
+        if repo.name == release_path.taggable_repo and branch_config.app_branch is not None:
+            return branch_config.app_branch
+        override = branch_config.stack_branches.get(repo.name)
+        if override is not None:
+            return override
+
+    if release_on_default_branch(release_path, release_type, branch_config):
+        return repo.default_branch
+
+    chore = chore_release_branch(version)
+    if branch_exists(repo.repo_url, chore):
+        return chore
+    return repo.default_branch
 
 
 def branches_to_sync(
@@ -112,19 +155,25 @@ def branches_to_sync(
     version: str,
     release_path: ReleasePath,
     release_type: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> List[str]:
-    """Decide which branches to sync based on release path and channel.
+    """Decide which branches to sync based on release path, channel, and overrides."""
+    branches: List[str] = [repo.default_branch]
+    release_branch = resolve_release_branch(repo, version, release_path, release_type, branch_config)
+    if release_branch not in branches:
+        branches.append(release_branch)
 
-    Flex external also syncs ``chore_release-<version>`` when that branch exists
-    on the remote. Flex internal and all OT-2 releases sync only the default branch.
-    """
-    if release_on_default_branch(release_path, release_type):
-        return [repo.default_branch]
+    if (
+        release_path.name == "flex"
+        and release_type == "external"
+        and branch_config is not None
+        and branch_config.app_branch is None
+        and repo.name == release_path.taggable_repo
+    ):
+        chore = chore_release_branch(version)
+        if chore not in branches and branch_exists(repo.repo_url, chore):
+            branches.append(chore)
 
-    branches = [repo.default_branch]
-    chore = chore_release_branch(version)
-    if branch_exists(repo.repo_url, chore):
-        branches.append(chore)
     return branches
 
 
@@ -243,6 +292,7 @@ def process_repo(
     version: str,
     release_path: ReleasePath,
     release_type: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> RepoState:
     """Clone or fetch the repo, checkout branches, and collect tags."""
     # clone or fetch
@@ -252,7 +302,7 @@ def process_repo(
         run_git_command(["fetch", "--all"], cwd=repo.local_path)
 
     # checkout branches
-    branches = branches_to_sync(repo, version, release_path, release_type)
+    branches = branches_to_sync(repo, version, release_path, release_type, branch_config)
     for br in branches:
         existing = [b.strip("* ").strip() for b in run_git_command(["branch"], cwd=repo.local_path).splitlines()]
         if br not in existing:
@@ -264,6 +314,7 @@ def process_repo(
     # collect tags
     state = RepoState()
     patterns = [repo.external_tag_pattern, repo.internal_tag_pattern]
+    channel_pattern = repo.external_tag_pattern if release_type == "external" else repo.internal_tag_pattern
 
     for br in branches:
         state.branch_tags[br] = {
@@ -277,6 +328,12 @@ def process_repo(
     for pat in patterns:
         tags = run_git_command(["tag", "-l", f"{pat}*", "--sort=-creatordate"], cwd=repo.local_path).splitlines()
         state.overall_tags[pat] = tags[0] if tags else None
+
+    if repo.name == release_path.taggable_repo:
+        state.channel_tags = run_git_command(
+            ["tag", "-l", f"{channel_pattern}*", "--sort=-v:refname"],
+            cwd=repo.local_path,
+        ).splitlines()
 
     return state
 
@@ -336,14 +393,11 @@ def get_next_ot2_tag_command(
     repo: RepoSpec,
     version: str,
     release_type: str,
-    state: RepoState,
-    branch: str,
+    app_channel_tags: List[str],
     stability: Ot2Stability = "stable",
 ) -> str:
     """Return the next OT-2 app calendar semver tag for the selected channel and stability."""
-    existing_tags: set[str] = set()
-    for pat_tags in state.branch_tags.get(branch, {}).values():
-        existing_tags.update(pat_tags)
+    existing_tags = set(app_channel_tags)
 
     if release_type == "external":
         year, month, _, _, _ = decode_ot2_external_version(version)
@@ -370,10 +424,11 @@ def format_tag_commands(
     release_version: str,
     *,
     branch: Optional[str] = None,
+    default_branch: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Return labeled shell commands for creating and pushing an annotated release tag."""
     commands: List[Tuple[str, str]] = []
-    if branch is not None and is_chore_release_branch(branch):
+    if branch is not None and default_branch is not None and branch != default_branch:
         commands.append(("Checkout", f"git checkout {branch}"))
     commands.extend(
         [
@@ -391,17 +446,24 @@ def release_branch_for_repo(
     version: str,
     release_path: ReleasePath,
     release_type: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> str:
-    """Return the branch to tag.
+    """Return the branch to tag, falling back to default when the target was not synced."""
+    resolved = resolve_release_branch(repo, version, release_path, release_type, branch_config)
+    if resolved in state.branch_tags:
+        return resolved
+    return repo.default_branch if repo.default_branch in state.branch_tags else resolved
 
-    Flex external prefers ``chore_release-<version>`` when that branch was synced
-    locally. Flex internal and all OT-2 releases use the repo default branch.
-    """
-    if release_on_default_branch(release_path, release_type):
-        return repo.default_branch
 
-    chore = chore_release_branch(version)
-    return chore if chore in state.branch_tags else repo.default_branch
+def app_channel_tags_from_results(
+    results: Dict[str, RepoState],
+    release_path: ReleasePath,
+) -> List[str]:
+    """Return all channel tags from the app monorepo clone."""
+    state = results.get(release_path.taggable_repo)
+    if state is None:
+        return []
+    return list(state.channel_tags)
 
 
 def branch_head_commit(repo: RepoSpec, branch: str) -> str:
@@ -546,42 +608,94 @@ def get_next_oe_core_tag_command(
     return f"v{next_version}"
 
 
-def get_next_flex_app_tag_command(
-    state: RepoState,
-    branch: str,
+def get_flex_app_tag_suggestion(
+    app_channel_tags: List[str],
+    branch_merged_tags: List[str],
     release_type: str,
     stability: str,
     version: str,
-) -> str:
-    """Suggest the next opentrons tag for Flex (ot3@ internal, v external)."""
-    branch_tags = tags_merged_on_branch(state, branch)
-    flex_stability = normalize_flex_stability(stability)
+    *,
+    branch: str,
+) -> NextFlexTagSuggestion:
+    """Suggest the next Flex app tag for one independent stability lane at a semver base."""
+    flex_stability = cast(FlexStability, normalize_flex_stability(stability))
+    base = flex_release_semver_base(version)
+
+    lane_in_repo = flex_tags_in_lane(app_channel_tags, release_type, flex_stability, base)
+    lane_on_branch = flex_tags_in_lane(branch_merged_tags, release_type, flex_stability, base)
+    latest_in_repo = lane_in_repo[0] if lane_in_repo else None
+    latest_on_branch = lane_on_branch[0] if lane_on_branch else None
 
     if release_type == "internal":
-        base = flex_release_semver_base(version)
         if flex_stability == "alpha":
-            alpha_num = next_alpha_number(f"ot3@{base}-alpha.", branch_tags)
-            return f"ot3@{base}-alpha.{alpha_num}"
-        if flex_stability == "beta":
-            beta_num = next_beta_number(f"ot3@{base}-beta.", branch_tags)
-            return f"ot3@{base}-beta.{beta_num}"
+            tag = f"ot3@{base}-alpha.{next_alpha_number(f'ot3@{base}-alpha.', app_channel_tags)}"
+        elif flex_stability == "beta":
+            tag = f"ot3@{base}-beta.{next_beta_number(f'ot3@{base}-beta.', app_channel_tags)}"
+        else:
+            candidate = f"ot3@{base}"
+            if candidate not in app_channel_tags:
+                tag = candidate
+            else:
+                next_version = semver.VersionInfo.parse(base).bump_patch()
+                tag = f"ot3@{next_version}"
+    else:
+        release_version = version if version.startswith("v") else f"v{version}"
+        if flex_stability == "alpha":
+            tag = next_alpha_tag(f"{release_version}-alpha.", app_channel_tags)
+        elif flex_stability == "beta":
+            tag = next_beta_tag(f"{release_version}-beta.", app_channel_tags)
+        else:
+            matching = [candidate for candidate in lane_in_repo if candidate.startswith(release_version)]
+            if release_version not in matching:
+                tag = release_version
+            else:
+                raise ValueError(f"Tag {release_version} already exists")
 
-        candidate = f"ot3@{base}"
-        if candidate not in branch_tags:
-            return candidate
-        next_version = semver.VersionInfo.parse(base).bump_patch()
-        return f"ot3@{next_version}"
+    note: Optional[str] = None
+    if latest_in_repo is not None and latest_in_repo != tag:
+        if latest_on_branch is None:
+            note = (
+                f"{latest_in_repo} is the newest {flex_stability} tag in the app repo but is not on "
+                f"{branch}; tag names are repo-wide, so the next {flex_stability} tag is {tag}."
+            )
+        elif latest_on_branch != latest_in_repo:
+            note = (
+                f"Newest {flex_stability} in the app repo is {latest_in_repo}; "
+                f"previous {flex_stability} on {branch} is {latest_on_branch}."
+            )
 
-    release_version = version if version.startswith("v") else f"v{version}"
-    if flex_stability == "alpha":
-        return next_alpha_tag(f"{release_version}-alpha.", branch_tags)
-    if flex_stability == "beta":
-        return next_beta_tag(f"{release_version}-beta.", branch_tags)
+    return NextFlexTagSuggestion(
+        tag=tag,
+        stability=flex_stability,
+        latest_in_repo=latest_in_repo,
+        latest_on_branch=latest_on_branch,
+        note=note,
+    )
 
-    matching = [tag for tag in branch_tags if tag.startswith(release_version)]
-    if release_version not in matching:
-        return release_version
-    raise ValueError(f"Tag {release_version} already exists on {branch}")
+
+def get_next_flex_app_tag_command(
+    app_channel_tags: List[str],
+    release_type: str,
+    stability: str,
+    version: str,
+    *,
+    branch_merged_tags: Optional[List[str]] = None,
+    branch: str = "",
+) -> str:
+    """Suggest the next opentrons tag for Flex (ot3@ internal, v external).
+
+    Alpha and beta are independent release flavors at the same semver base. Each lane
+    has its own counter in the app monorepo tag catalog.
+    """
+    merged = branch_merged_tags if branch_merged_tags is not None else []
+    return get_flex_app_tag_suggestion(
+        app_channel_tags,
+        merged,
+        release_type,
+        stability,
+        version,
+        branch=branch,
+    ).tag
 
 
 def all_integer_firmware_version_numbers(repo: RepoSpec) -> List[int]:
@@ -652,20 +766,15 @@ def flex_internal_alpha_from_opentrons(
     stability: str,
     release_path: ReleasePath,
     release_type: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> Optional[int]:
     """Return the coordinated internal alpha number derived from opentrons ot3@ tags."""
     if stability != "unstable":
         return None
 
-    app_repo = repo_by_name("opentrons")
-    app_state = results.get(app_repo.name)
-    if app_state is None:
-        return None
-
-    branch = release_branch_for_repo(app_state, app_repo, version, release_path, release_type)
+    app_channel_tags = app_channel_tags_from_results(results, release_path)
     base = flex_release_semver_base(version)
-    branch_tags = tags_merged_on_branch(app_state, branch)
-    return next_alpha_number(f"ot3@{base}-alpha.", branch_tags)
+    return next_alpha_number(f"ot3@{base}-alpha.", app_channel_tags)
 
 
 def get_next_stack_repo_tag(
@@ -677,6 +786,7 @@ def get_next_stack_repo_tag(
     stability: str,
     release_path: ReleasePath,
     results: Optional[Dict[str, RepoState]] = None,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> str:
     """Suggest the next tag for a stack repo that is not the app monorepo."""
     if repo.name == "buildroot":
@@ -688,7 +798,14 @@ def get_next_stack_repo_tag(
         if release_type == "internal" and release_path.name == "flex":
             internal_base = flex_release_semver_base(version)
             internal_alpha = (
-                flex_internal_alpha_from_opentrons(results, version, stability, release_path, release_type)
+                flex_internal_alpha_from_opentrons(
+                    results,
+                    version,
+                    stability,
+                    release_path,
+                    release_type,
+                    branch_config,
+                )
                 if results is not None
                 else None
             )
@@ -714,12 +831,20 @@ def get_flex_coordinated_stack_tag_plan(
     release_path: ReleasePath,
     results: Dict[str, RepoState],
     app_tag: Optional[str],
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> TagPlan:
     """Build a tag plan for oe-core or ot3-firmware using the opentrons release tag."""
     from automation.flex_coordinated_tags import coordinated_tag_for_repo
 
-    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
-    stack_tag = app_tag or compute_app_tag(release_path, results, version, release_type, stability)
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type, branch_config)
+    stack_tag = app_tag or compute_app_tag(
+        release_path,
+        results,
+        version,
+        release_type,
+        stability,
+        branch_config,
+    )
     if stack_tag is None:
         return TagPlan(
             needs_tag=False,
@@ -730,8 +855,15 @@ def get_flex_coordinated_stack_tag_plan(
         )
 
     coordinated = coordinated_tag_for_repo(repo.name, stack_tag)
-    latest_tag = latest_channel_tag(state, repo, branch, release_type)
     merged_tags = tags_merged_on_branch(state, branch)
+    base = flex_release_semver_base(version)
+    flex_stability = cast(FlexStability, normalize_flex_stability(stability))
+    latest_tag = latest_merged_flex_tag_for_stability(
+        merged_tags,
+        release_type,
+        flex_stability,
+        base,
+    )
     tag_exists = coordinated in merged_tags
     if tag_exists and branch_head_commit(repo, branch) == tag_commit(repo, coordinated):
         return TagPlan(
@@ -776,6 +908,7 @@ def get_stack_repo_tag_plan(
     release_path: ReleasePath,
     results: Optional[Dict[str, RepoState]] = None,
     app_tag: Optional[str] = None,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> TagPlan:
     """Decide whether a stack repo needs a tag and what it should be."""
     if release_path.name == "flex" and repo.name in FLEX_COORDINATED_STACK_REPOS:
@@ -790,9 +923,10 @@ def get_stack_repo_tag_plan(
             release_path,
             results,
             app_tag,
+            branch_config,
         )
 
-    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type, branch_config)
     if repo.name == "buildroot" and release_type == "external":
         latest_tag = latest_buildroot_external_tag(state, branch)
     else:
@@ -808,7 +942,17 @@ def get_stack_repo_tag_plan(
             reason=f"{branch} matches {latest_tag}",
         )
 
-    next_tag = get_next_stack_repo_tag(repo, state, branch, version, release_type, stability, release_path, results)
+    next_tag = get_next_stack_repo_tag(
+        repo,
+        state,
+        branch,
+        version,
+        release_type,
+        stability,
+        release_path,
+        results,
+        branch_config,
+    )
     reason = f"commits on {branch} since {latest_tag or 'no prior channel tag'}"
     return TagPlan(
         needs_tag=True,
@@ -843,9 +987,15 @@ def print_suggested_tag_block(
     release_version: str,
     *,
     branch: Optional[str] = None,
+    default_branch: Optional[str] = None,
 ) -> None:
     """Print a header panel and git commands for creating and pushing a tag."""
-    command_lines = format_tag_commands(next_tag, release_version, branch=branch)
+    command_lines = format_tag_commands(
+        next_tag,
+        release_version,
+        branch=branch,
+        default_branch=default_branch,
+    )
     body = f"[bold cyan]{next_tag}[/]\n\n"
     for cmd_label, cmd in command_lines:
         body += f"[bold green]{cmd_label}:[/] {cmd}\n"
@@ -866,9 +1016,15 @@ def print_firmware_coordination_tag_block(
     existing_version_tag: str,
     *,
     branch: Optional[str] = None,
+    default_branch: Optional[str] = None,
 ) -> None:
     """Print ot3-firmware coordination-only tag commands when vN already exists on HEAD."""
-    command_lines = format_tag_commands(coordination_tag, release_version, branch=branch)
+    command_lines = format_tag_commands(
+        coordination_tag,
+        release_version,
+        branch=branch,
+        default_branch=default_branch,
+    )
     body = (
         f"[bold cyan]{coordination_tag}[/] (CI coordination tag)\n"
         f"[dim]Reuse existing {existing_version_tag} on this commit for cmake.[/]\n\n"
@@ -892,10 +1048,11 @@ def print_firmware_dual_tag_block(
     release_version: str,
     *,
     branch: Optional[str] = None,
+    default_branch: Optional[str] = None,
 ) -> None:
     """Print ot3-firmware dual-tag commands (integer vN plus coordination tag)."""
     command_lines: List[Tuple[str, str]] = []
-    if branch is not None and is_chore_release_branch(branch):
+    if branch is not None and default_branch is not None and branch != default_branch:
         command_lines.append(("Checkout", f"git checkout {branch}"))
     command_lines.extend(
         [
@@ -942,6 +1099,7 @@ def print_tag_plan(repo: RepoSpec, plan: TagPlan, release_version: str) -> None:
             plan.secondary_tags[0],
             release_version,
             branch=plan.branch,
+            default_branch=repo.default_branch,
         )
         return
 
@@ -951,10 +1109,17 @@ def print_tag_plan(repo: RepoSpec, plan: TagPlan, release_version: str) -> None:
             release_version,
             plan.existing_firmware_version_tag,
             branch=plan.branch,
+            default_branch=repo.default_branch,
         )
         return
 
-    print_suggested_tag_block(f"{repo.name} tag", plan.next_tag, release_version, branch=plan.branch)
+    print_suggested_tag_block(
+        f"{repo.name} tag",
+        plan.next_tag,
+        release_version,
+        branch=plan.branch,
+        default_branch=repo.default_branch,
+    )
 
 
 def get_next_tag_command(
@@ -965,21 +1130,31 @@ def get_next_tag_command(
     branch: str,
     release_type: str = "external",
     release_path: Optional[ReleasePath] = None,
+    app_channel_tags: Optional[List[str]] = None,
 ) -> str:
     """Return the next annotated tag name for the app repo."""
     if release_path is not None and release_path.name == "ot2":
         ot2_stability: Ot2Stability = "alpha" if stability == "alpha" else "beta" if stability == "beta" else "stable"
+        channel_tags = app_channel_tags if app_channel_tags is not None else state.channel_tags
         return get_next_ot2_tag_command(
             repo,
             version,
             release_type,
-            state,
-            branch,
+            channel_tags,
             ot2_stability,
         )
 
     if release_path is not None and release_path.name == "flex":
-        return get_next_flex_app_tag_command(state, branch, release_type, stability, version)
+        channel_tags = app_channel_tags if app_channel_tags is not None else state.channel_tags
+        branch_merged = tags_merged_on_branch(state, branch)
+        return get_next_flex_app_tag_command(
+            channel_tags,
+            release_type,
+            stability,
+            version,
+            branch_merged_tags=branch_merged,
+            branch=branch,
+        )
 
     branch_tags = tags_merged_on_branch(state, branch)
     if stability == "unstable":
@@ -1002,6 +1177,8 @@ def print_external_table(
     version: str,
     release_path: ReleasePath,
     release_type: str,
+    stability: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> None:
     """Print a table of external compare URLs, using chore_release branch if present."""
     tbl = Table(title="External GitHub Compare URLs")
@@ -1013,10 +1190,20 @@ def print_external_table(
         if not st:
             continue
 
-        pat = repo.external_tag_pattern
-        branch = release_branch_for_repo(st, repo, version, release_path, release_type)
-        tags = st.branch_tags[branch].get(pat, [])
-        tag = tags[0] if tags else None
+        branch = release_branch_for_repo(st, repo, version, release_path, release_type, branch_config)
+        if repo.name == release_path.taggable_repo:
+            tag = compare_tag_for_app_release(
+                release_path,
+                results,
+                version,
+                release_type,
+                stability,
+                branch,
+            )
+        else:
+            pat = repo.external_tag_pattern
+            tags = st.branch_tags[branch].get(pat, [])
+            tag = tags[0] if tags else None
         base = repo.repo_url.removesuffix(".git")
 
         if tag:
@@ -1036,6 +1223,8 @@ def print_internal_table(
     version: str,
     release_path: ReleasePath,
     release_type: str,
+    stability: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> None:
     """Print a table of internal compare URLs for the release branch."""
     tbl = Table(title="Internal GitHub Compare URLs")
@@ -1047,10 +1236,20 @@ def print_internal_table(
         if not st:
             continue
 
-        pat = repo.internal_tag_pattern
-        branch = release_branch_for_repo(st, repo, version, release_path, release_type)
-        tags = st.branch_tags[branch].get(pat, [])
-        tag = tags[0] if tags else None
+        branch = release_branch_for_repo(st, repo, version, release_path, release_type, branch_config)
+        if repo.name == release_path.taggable_repo:
+            tag = compare_tag_for_app_release(
+                release_path,
+                results,
+                version,
+                release_type,
+                stability,
+                branch,
+            )
+        else:
+            pat = repo.internal_tag_pattern
+            tags = st.branch_tags[branch].get(pat, [])
+            tag = tags[0] if tags else None
         base = repo.repo_url.removesuffix(".git")
 
         if tag:
@@ -1305,6 +1504,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not prompt; use defaults for omitted options.",
     )
+    parser.add_argument(
+        "--app-branch",
+        help="Branch to tag in the app monorepo (opentrons for Flex, opentrons-ot2 for OT-2).",
+    )
+    parser.add_argument(
+        "--stack-branch",
+        action="append",
+        metavar="REPO=BRANCH",
+        help="Branch to tag for a stack repo (repeatable). Example: oe-core=main",
+    )
     return parser
 
 
@@ -1375,13 +1584,21 @@ ASSUMPTIONS_MARKDOWN = Markdown(
     commit does not already have one. Retag-only releases need only the coordination tag (`ex*` or `ot3@*`)
   - Validate with `just validate-release-tags --tag <app-tag>` before pushing the app tag
 - Flex **external** releases use isolation branches named `chore_release-<version>` when present
-  - suggested tag commands include `git checkout chore_release-<version>` before `git tag -a`
-- Flex **internal** and all **OT-2** releases tag default-branch HEAD
-  (`edge` / `opentrons-develop` / `main`); no `chore_release` branch
+  - override with `--app-branch` (any branch name, including `chore_release-10.0.0-beta`)
+  - suggested tag commands include `git checkout <release-branch>` when it differs from the default branch
+- Flex **internal** and **OT-2** releases default to tagging default-branch HEAD
+  (`edge` / `opentrons-develop` / `main`); override per repo with `--app-branch` and `--stack-branch REPO=BRANCH`
+  - next-tag suggestions read the app monorepo tag catalog (`opentrons` for Flex,
+    `opentrons-ot2` for OT-2). At a given semver base, **stable**, **alpha**, and **beta**
+    are independent release flavors with separate counters
+    (for example `ot3@4.0.0-alpha.3` and `ot3@4.0.0-beta.0` can both exist)
+  - compare URLs and change logs use the prior tag in the **same stability lane**
+    merged into the release branch, not a different lane
   - Flex internal examples: `ot3@X.Y.Z`, `ot3@X.Y.Z-alpha.N`, `ot3@X.Y.Z-beta.N`
   - Flex external examples: `vX.Y.Z`, `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`
-  - Internal prerelease trains on the same base: **beta** (VM isolation) then **alpha** (CRS) when both are active
-    - beta desktop builds overwrite alpha updater YAML; pair releases when both channels need updates
+  - When beta and alpha both need updates in one cycle, ship beta before alpha so beta
+    desktop builds do not leave alpha updater YAML pointing at the wrong build; that
+    sequencing rule does **not** mean alpha must always precede beta on the semver base
 """
 )
 
@@ -1399,22 +1616,84 @@ def repo_by_name(name: str) -> RepoSpec:
     raise KeyError(f"Unknown repo: {name}")
 
 
-def compute_app_tag(
+def app_stability_latest_tags(
+    release_path: ReleasePath,
+    results: Dict[str, RepoState],
+    release_type: str,
+    version: str,
+) -> StabilityLatestTags:
+    """Return latest stable, alpha, and beta tags from the app monorepo catalog."""
+    app_tags = app_channel_tags_from_results(results, release_path)
+    if release_path.name == "flex":
+        base = flex_release_semver_base(version)
+        return latest_tags_by_stability_flex(app_tags, release_type, base=base)
+    return latest_tags_by_stability_ot2(app_tags, release_type)
+
+
+def compare_tag_for_app_release(
     release_path: ReleasePath,
     results: Dict[str, RepoState],
     version: str,
     release_type: str,
     stability: str,
+    branch: str,
 ) -> Optional[str]:
-    """Return the next suggested app monorepo tag without printing."""
+    """Return the prior tag in the same stability lane merged into the release branch."""
     repo = repo_by_name(release_path.taggable_repo)
     state = results.get(repo.name)
     if state is None:
         return None
 
-    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
+    branch_merged = tags_merged_on_branch(state, branch)
+    flex_stability = normalize_flex_stability(stability)
+    ot2_stability: Ot2Stability = "alpha" if stability == "alpha" else "beta" if stability == "beta" else "stable"
+
+    if release_path.name == "flex":
+        base = flex_release_semver_base(version)
+        return latest_merged_flex_tag_for_stability(
+            branch_merged,
+            release_type,
+            cast(FlexStability, flex_stability),
+            base,
+        )
+
+    return latest_merged_ot2_tag_for_stability(branch_merged, release_type, ot2_stability)
+
+
+def compute_app_tag_suggestion(
+    release_path: ReleasePath,
+    results: Dict[str, RepoState],
+    version: str,
+    release_type: str,
+    stability: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
+) -> Optional[NextFlexTagSuggestion | str]:
+    """Return the next suggested app tag, with Flex lane context when applicable."""
+    repo = repo_by_name(release_path.taggable_repo)
+    state = results.get(repo.name)
+    if state is None:
+        return None
+
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type, branch_config)
+    app_channel_tags = app_channel_tags_from_results(results, release_path)
+    branch_merged = tags_merged_on_branch(state, branch)
+
+    if release_path.name == "flex":
+        try:
+            return get_flex_app_tag_suggestion(
+                app_channel_tags,
+                branch_merged,
+                release_type,
+                stability,
+                version,
+                branch=branch,
+            )
+        except Exception as err:
+            console.print(f"[yellow]No next tag for {repo.name}: {err}[/]")
+            return None
+
     try:
-        return get_next_tag_command(
+        tag = get_next_tag_command(
             repo,
             version,
             stability,
@@ -1422,10 +1701,36 @@ def compute_app_tag(
             branch,
             release_type,
             release_path,
+            app_channel_tags,
         )
     except Exception as err:
         console.print(f"[yellow]No next tag for {repo.name}: {err}[/]")
         return None
+    return tag
+
+
+def compute_app_tag(
+    release_path: ReleasePath,
+    results: Dict[str, RepoState],
+    version: str,
+    release_type: str,
+    stability: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
+) -> Optional[str]:
+    """Return the next suggested app monorepo tag without printing."""
+    suggestion = compute_app_tag_suggestion(
+        release_path,
+        results,
+        version,
+        release_type,
+        stability,
+        branch_config,
+    )
+    if suggestion is None:
+        return None
+    if isinstance(suggestion, NextFlexTagSuggestion):
+        return suggestion.tag
+    return suggestion
 
 
 def print_app_tag_section(
@@ -1435,6 +1740,7 @@ def print_app_tag_section(
     release_type: str,
     stability: str,
     release_version: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> None:
     """Print change summary and tag commands for the app repo."""
     repo = repo_by_name(release_path.taggable_repo)
@@ -1442,17 +1748,46 @@ def print_app_tag_section(
     if state is None:
         return
 
-    pattern = repo.external_tag_pattern if release_type == "external" else repo.internal_tag_pattern
-    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
-    tags = state.branch_tags[branch].get(pattern, [])
-    latest_tag = tags[0] if tags else None
-    if latest_tag:
-        show_changes_since_tag(repo, branch, latest_tag)
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type, branch_config)
+    compare_tag = compare_tag_for_app_release(
+        release_path,
+        results,
+        version,
+        release_type,
+        stability,
+        branch,
+    )
+    flex_stability = normalize_flex_stability(stability)
+    if compare_tag:
+        show_changes_since_tag(repo, branch, compare_tag)
+    elif release_path.name == "flex":
+        console.print(
+            f"[dim]No prior {flex_stability} tag on [bold]{branch}[/]; "
+            f"showing changes since the last tag in this stability lane when one exists.[/]"
+        )
 
-    next_tag = compute_app_tag(release_path, results, version, release_type, stability)
-    if next_tag is None:
+    suggestion = compute_app_tag_suggestion(
+        release_path,
+        results,
+        version,
+        release_type,
+        stability,
+        branch_config,
+    )
+    if suggestion is None:
         return
-    print_suggested_tag_block("app tag", next_tag, release_version, branch=branch)
+
+    next_tag = suggestion.tag if isinstance(suggestion, NextFlexTagSuggestion) else suggestion
+    if isinstance(suggestion, NextFlexTagSuggestion) and suggestion.note:
+        console.print(f"[yellow]{suggestion.note}[/]")
+
+    print_suggested_tag_block(
+        "app tag",
+        next_tag,
+        release_version,
+        branch=branch,
+        default_branch=repo.default_branch,
+    )
 
 
 def stack_repo_push_order(release_path: ReleasePath) -> List[str]:
@@ -1465,6 +1800,8 @@ def print_tag_push_order_note(
     *,
     release_type: Optional[str] = None,
     version: Optional[str] = None,
+    branch_config: Optional[ReleaseBranchConfig] = None,
+    results: Optional[Dict[str, RepoState]] = None,
 ) -> None:
     """Remind the operator to push dependent repo tags before the app monorepo tag."""
     ordered = stack_repo_push_order(release_path)
@@ -1478,7 +1815,20 @@ def print_tag_push_order_note(
         lines.append(f"{step}. [bold]{repo_name}[/] ({label}), if a new tag is needed")
         step += 1
     lines.append(f"{step}. [bold]{release_path.taggable_repo}[/] (app), always last")
-    if release_path.name == "flex" and release_type == "external" and version is not None:
+
+    checkout_lines: List[str] = []
+    if results is not None and release_type is not None and version is not None:
+        for repo in repos_for_path(release_path):
+            state = results.get(repo.name)
+            if state is None:
+                continue
+            branch = release_branch_for_repo(state, repo, version, release_path, release_type, branch_config)
+            if branch != repo.default_branch:
+                checkout_lines.append(f"[bold]{repo.name}[/]: git checkout {branch}")
+
+    if checkout_lines:
+        lines.extend(["", "Check out the release branch in each repo before tagging:", *checkout_lines])
+    elif release_path.name == "flex" and release_type == "external" and version is not None:
         lines.extend(
             [
                 "",
@@ -1498,6 +1848,7 @@ def print_stack_repo_tag_section(
     stability: str,
     release_version: str,
     app_tag: Optional[str] = None,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> None:
     """Print whether a stack repo needs a tag and the commands to push it."""
     repo = repo_by_name(repo_name)
@@ -1515,6 +1866,7 @@ def print_stack_repo_tag_section(
         release_path,
         results,
         app_tag,
+        branch_config,
     )
     print_tag_plan(repo, plan, release_version)
 
@@ -1545,20 +1897,72 @@ def print_track_builds_command(release_path: ReleasePath, app_tag: str) -> None:
 def ot2_external_tags_from_state(
     results: Dict[str, RepoState],
     release_path: ReleasePath,
-    release_type: str,
-    version: str,
 ) -> set[str]:
-    """Collect calendar external tags on the app release branch."""
+    """Collect calendar external tags from the app monorepo catalog."""
+    return set(app_channel_tags_from_results(results, release_path))
+
+
+def print_release_lane_context_panel(
+    release_path: ReleasePath,
+    results: Dict[str, RepoState],
+    release_type: str,
+    stability: str,
+    version: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
+) -> None:
+    """Explain independent alpha/beta lanes for the selected Flex release."""
+    if release_path.name != "flex":
+        return
+
     repo = repo_by_name(release_path.taggable_repo)
     state = results.get(repo.name)
     if state is None:
-        return set()
+        return
 
-    branch = release_branch_for_repo(state, repo, version, release_path, release_type)
-    existing: set[str] = set()
-    for pat_tags in state.branch_tags.get(branch, {}).values():
-        existing.update(pat_tags)
-    return existing
+    branch = release_branch_for_repo(state, repo, version, release_path, release_type, branch_config)
+    base = flex_release_semver_base(version)
+    repo_lanes = app_stability_latest_tags(release_path, results, release_type, version)
+    branch_lanes = latest_tags_by_stability_flex(
+        tags_merged_on_branch(state, branch),
+        release_type,
+        base=base,
+    )
+    flex_stability = normalize_flex_stability(stability)
+
+    body = (
+        f"Semver base [bold]{base}[/]. Stability lanes are independent release flavors, "
+        f"not a promote-alpha-to-beta-to-stable cycle.\n\n"
+        f"[bold]App repo ({repo.name})[/] newest tags at this base:\n"
+        f"  stable: {format_tag_cell(repo_lanes.stable)}\n"
+        f"  alpha:  {format_tag_cell(repo_lanes.alpha)}\n"
+        f"  beta:   {format_tag_cell(repo_lanes.beta)}\n\n"
+        f"[bold]On release branch {branch}[/]:\n"
+        f"  alpha:  {format_tag_cell(branch_lanes.alpha)}\n"
+        f"  beta:   {format_tag_cell(branch_lanes.beta)}\n\n"
+        f"This run targets [bold]{flex_stability}[/]."
+    )
+    console.print()
+    console.print(Panel(body, title="Release flavor lanes", border_style="cyan", padding=(1, 2)))
+
+
+def format_tag_cell(tag: Optional[str]) -> str:
+    """Render a tag name or an italic None placeholder for summary tables."""
+    return tag if tag else "[italic]None[/italic]"
+
+
+def stack_repo_stability_tags(
+    state: RepoState,
+    branch: str,
+    release_path: ReleasePath,
+    release_type: str,
+    version: str,
+) -> StabilityLatestTags:
+    """Return latest stable, alpha, and beta tags merged into a stack repo branch."""
+    branch_merged = tags_merged_on_branch(state, branch)
+    if release_path.name == "flex":
+        base = flex_release_semver_base(version)
+        return latest_tags_by_stability_flex(branch_merged, release_type, base=base)
+    return latest_tags_by_stability_ot2(branch_merged, release_type)
 
 
 def resolve_ot2_external_version_from_state(
@@ -1569,7 +1973,7 @@ def resolve_ot2_external_version_from_state(
     stability: Ot2Stability,
 ) -> str:
     """Infer the OT-2 external YY.M.N base from synced app tags."""
-    existing_tags = ot2_external_tags_from_state(results, release_path, release_type, version)
+    existing_tags = ot2_external_tags_from_state(results, release_path)
     year, month, _, _, _ = decode_ot2_external_version(version)
     return infer_ot2_external_base_version(
         existing_tags,
@@ -1583,6 +1987,7 @@ def run_release(
     release_type: str,
     stability: str,
     version: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
 ) -> None:
     """Sync repos and print release tables, tag guidance, and follow-up commands."""
     active_repos = repos_for_path(release_path)
@@ -1590,7 +1995,7 @@ def run_release(
 
     results: Dict[str, RepoState] = {}
     with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(process_repo, r, version, release_path, release_type): r for r in sync_repos}
+        futures = {executor.submit(process_repo, r, version, release_path, release_type, branch_config): r for r in sync_repos}
         for future in as_completed(futures):
             repo = futures[future]
             try:
@@ -1612,15 +2017,34 @@ def run_release(
             console.print(f"[red]{err}[/]")
             sys.exit(1)
 
+    branch_summary = ""
+    if branch_config is not None and (branch_config.app_branch or branch_config.stack_branches):
+        parts: List[str] = []
+        if branch_config.app_branch:
+            parts.append(f"app={branch_config.app_branch}")
+        for repo_name, branch in sorted(branch_config.stack_branches.items()):
+            parts.append(f"{repo_name}={branch}")
+        branch_summary = f", Branches: [bold]{', '.join(parts)}[/]"
+
     console.print(
         f"🛠 Path: [bold]{release_path.label}[/], Release: [bold]{release_type}[/], "
-        f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]\n"
+        f"Stability: [bold]{stability}[/], Version: [bold]{version}[/]{branch_summary}\n"
     )
 
-    summary = Table(title=f"Latest Tags Summary ({release_path.label})", show_lines=True)
+    app_latest = app_stability_latest_tags(release_path, results, release_type, version)
+
+    semver_base = flex_release_semver_base(version) if release_path.name == "flex" else version
+    summary = Table(
+        title=(
+            f"Latest Tags Summary ({release_path.label}) "
+            f"[dim]stable, alpha, and beta are independent lanes at {semver_base}[/dim]"
+        ),
+        show_lines=True,
+    )
     summary.add_column("Repo", style="bold")
-    summary.add_column("Pattern")
-    summary.add_column("Latest Tag")
+    summary.add_column("Stable")
+    summary.add_column("Alpha")
+    summary.add_column("Beta")
     summary.add_column("Branch")
 
     for repo in active_repos:
@@ -1628,28 +2052,60 @@ def run_release(
         if not st:
             continue
 
-        pattern = repo.external_tag_pattern if release_type == "external" else repo.internal_tag_pattern
-        branch = release_branch_for_repo(st, repo, version, release_path, release_type)
-        tags = st.branch_tags[branch].get(pattern, [])
-        tag = tags[0] if tags else None
+        branch = release_branch_for_repo(st, repo, version, release_path, release_type, branch_config)
+        if repo.name == release_path.taggable_repo:
+            latest = app_latest
+        else:
+            latest = stack_repo_stability_tags(st, branch, release_path, release_type, version)
 
         summary.add_row(
             repo.name,
-            pattern,
-            tag or "[italic]None[/italic]",
+            format_tag_cell(latest.stable),
+            format_tag_cell(latest.alpha),
+            format_tag_cell(latest.beta),
             branch,
         )
 
     console.print(summary)
+    print_release_lane_context_panel(
+        release_path,
+        results,
+        release_type,
+        stability,
+        version,
+        branch_config,
+    )
 
     if release_type == "external":
-        print_external_table(results, active_repos, version, release_path, release_type)
+        print_external_table(
+            results,
+            active_repos,
+            version,
+            release_path,
+            release_type,
+            stability,
+            branch_config,
+        )
     else:
-        print_internal_table(results, active_repos, version, release_path, release_type)
+        print_internal_table(
+            results,
+            active_repos,
+            version,
+            release_path,
+            release_type,
+            stability,
+            branch_config,
+        )
 
-    print_tag_push_order_note(release_path, release_type=release_type, version=version)
+    print_tag_push_order_note(
+        release_path,
+        release_type=release_type,
+        version=version,
+        branch_config=branch_config,
+        results=results,
+    )
 
-    app_tag = compute_app_tag(release_path, results, version, release_type, stability)
+    app_tag = compute_app_tag(release_path, results, version, release_type, stability, branch_config)
     release_version = release_version_label(release_path, release_type, version, app_tag)
 
     for repo_name in release_path.stack_tag_repos:
@@ -1664,13 +2120,34 @@ def run_release(
             stability,
             release_version,
             app_tag,
+            branch_config,
         )
 
     console.rule(f"{release_path.taggable_repo} (app) tag")
-    print_app_tag_section(release_path, results, version, release_type, stability, release_version)
+    print_app_tag_section(
+        release_path,
+        results,
+        version,
+        release_type,
+        stability,
+        release_version,
+        branch_config,
+    )
 
     if app_tag is not None:
         print_track_builds_command(release_path, app_tag)
+
+
+def resolve_branch_config(args: argparse.Namespace) -> ReleaseBranchConfig:
+    """Resolve branch overrides from CLI flags."""
+    try:
+        return build_release_branch_config(
+            app_branch=args.app_branch,
+            stack_branch=args.stack_branch,
+        )
+    except ValueError as err:
+        console.print(f"[red]{err}[/]")
+        sys.exit(1)
 
 
 def main() -> None:
@@ -1686,8 +2163,9 @@ def main() -> None:
     release_type = resolve_release_type(args)
     stability = resolve_stability(release_path, args)
     version = resolve_release_version(release_path, release_type, args)
+    branch_config = resolve_branch_config(args)
 
-    run_release(release_path, release_type, stability, version)
+    run_release(release_path, release_type, stability, version, branch_config)
 
 
 if __name__ == "__main__":

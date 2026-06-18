@@ -26,7 +26,9 @@ The system supports internal and external release channels. This tool helps enfo
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo, but is not included in release tables or tagging.
 
-Isolation branches follow `chore_release-<version>` in each repo for **Flex external** releases only. **Flex internal** and **all OT-2** releases tag default-branch HEAD and do not use `chore_release` branches. For Flex external, `just go` includes `git checkout chore_release-<version>` in each suggested tag command block; run that checkout in each repo before tagging.
+Release branches default by path and channel, but **`just go` accepts overrides** (see Agentic CLI reference). Flex **external** prefers `chore_release-<version>` when that branch exists on the remote. Flex **internal** and OT-2 default to each repo's default branch (`edge` / `main` / `opentrons-develop`). Use `--app-branch` and `--stack-branch REPO=BRANCH` when a release flavor ships from a named branch (for example `chore_release-10.0.0-beta` on `opentrons` while stack repos stay on `main`).
+
+When the release branch differs from the repo default, `just go` prints `git checkout <branch>` before suggested `git tag -a` commands.
 
 ## Local Cloned Repos (Source of Truth)
 
@@ -72,11 +74,13 @@ External tags use a `v` prefix; internal tags use `internal@`.
 
 ### Flex internal vs external branching
 
-| Path / channel | Branch to tag | Version inference (default) |
+| Path / channel | Default branch to tag | Version inference (default) |
 |---|---|---|
-| **Flex internal** | Default branch HEAD (`opentrons`: `edge`, `oe-core` / `ot3-firmware`: `main`) | Highest `ot3@X.Y.Z` base merged into `edge` |
-| **Flex external** | `chore_release-<version>` when present, else default branch | Highest `chore_release-X.Y.Z` on `opentrons`, fallback latest `v*` tag base |
+| **Flex internal** | Default branch HEAD (`opentrons`: `edge`, `oe-core` / `ot3-firmware`: `main`) | Highest `ot3@X.Y.Z` base from app repo tag catalog |
+| **Flex external** | `chore_release-<version>` when present on remote, else default branch | Highest `chore_release-X.Y.Z` on `opentrons`, fallback latest `v*` tag base |
 | **OT-2 internal / external** | Default branch HEAD (`opentrons-ot2`: `edge`, `buildroot`: `opentrons-develop`) | Calendar semver for app + internal (`YY.M.DNN` internal, `YY.M.N` external app); buildroot external patch bump from latest traditional `v*` tag |
+
+**Branch overrides:** `--app-branch <branch>` on the app monorepo; `--stack-branch oe-core=main` (repeatable) per stack repo. Example: internal beta from `edge` on `opentrons` with `main` on oe-core and firmware.
 
 Internal tags: coordinated `ot3@` / `v*` on `opentrons` and `oe-core`. `ot3-firmware` uses the same `ot3@*` internally; external stack `v*` maps to `ex*` on firmware plus integer `vN` on the same commit. OT-2 app and buildroot share `internal@` calendar tags. OT-2 external app uses calendar `vYY.M.N`; buildroot external uses independent traditional `vX.Y.Z`.
 
@@ -92,12 +96,19 @@ Flex uses **coordinated stack tags** on `opentrons` and `oe-core`. In `just go`,
 
 Tag suggestion rules in `automation/go.py`:
 
-- **App (`opentrons`):** base `X.Y.Z` comes from the prompted release version. Stable: `ot3@X.Y.Z` / `vX.Y.Z` if missing, else patch bump. Alpha/beta: increment prerelease `.N` from branch tags.
+- **App (`opentrons` / `opentrons-ot2`):** base `X.Y.Z` (Flex) or calendar version (OT-2) from the prompted release version. Flex stable: `ot3@X.Y.Z` / `vX.Y.Z` if missing, else patch bump. Flex alpha/beta: **independent lane counters** at the same base (for example `ot3@4.0.0-alpha.3` and `ot3@4.0.0-beta.0` can coexist). Next tag numbers are read from the **app monorepo tag catalog** (`opentrons` for Flex, `opentrons-ot2` for OT-2). Change logs compare against the prior tag in the **same stability lane** merged into the release branch.
 - **Robot OS (`oe-core`):** same stack tag as the app. Retag unchanged commits when the repo did not change.
 - **Firmware (`ot3-firmware`):** coordination tag is `ot3@*` (internal) or `ex*` mapped from stack `v*` (external). Integer `vN` is globally unique in the firmware repo; suggest a new `vN` only when the release commit does not already have one. Retag-only releases need only the coordination tag.
 - **Before pushing the app tag:** run `just validate-release-tags --tag <app-tag>`. `oe-core` `build-refs` maps external stack tags to `ex*` on firmware ([PR #329](https://github.com/Opentrons/oe-core/pull/329)); missing tags fail (no `:latest:` fallback).
 
-**Internal prerelease trains** (Flex only; OT-2 unchanged): on the same `X.Y.Z` base, **beta** (`ot3@X.Y.Z-beta.N`) serves the VM isolation train and **alpha** (`ot3@X.Y.Z-alpha.N`) serves CRS. When both channels need updates in one cycle, ship beta before alpha (beta desktop builds overwrite alpha updater YAML).
+**Flex release flavors** (same `X.Y.Z` base, independent lanes; not a strict promote-alpha-to-beta ladder):
+
+| Lane | Stability in `go` | Tag example | Typical use |
+|---|---|---|---|
+| VM isolation | `beta` | `ot3@4.0.0-beta.0` | Beta app channel |
+| CRS | `alpha` | `ot3@4.0.0-alpha.4` | Alpha app channel; can ship after beta on the same base |
+
+When **both** beta and alpha channels need fresh builds in the **same cycle**, ship beta before alpha so beta desktop builds do not leave `alpha.yml` pointing at the wrong build. That updater YAML rule does **not** require alpha to precede beta on the semver base.
 
 ### OT-2 semver tagging
 
@@ -184,7 +195,7 @@ Run everything via `uv run just <recipe> ...` or `uv run ./automation/<script>.p
 ### Typical release sequence
 
 1. **Plan tags:** `just go --non-interactive --skip-assumptions --path flex|ot2 --release-type internal|external --stability ... [--version ...]`
-2. **Human:** run printed tag commands in each repo (stack repos first, app last). For Flex external, `git checkout chore_release-<version>` is included before each `git tag -a`
+2. **Human:** run printed tag commands in each repo (stack repos first, app last). Check out the release branch in each repo when `go` prints `git checkout …`
 3. **Validate coordinated tags (Flex):** `just validate-release-tags --tag <app-tag>` before pushing the app tag
 4. **Track CI:** `just track-builds --non-interactive --path flex|ot2 --tag <app-tag> --wait`
 5. **Human:** wait for builds; validate manifests if needed (`just ot2-assets` / `just flex-assets`)
@@ -203,19 +214,22 @@ Syncs stack repos locally and prints release analysis plus suggested tag command
 | `--release-type internal\|external` | Channel (default: `external`, or prompt) |
 | `--stability` | OT-2: `stable`, `alpha`, `beta`. Flex: `stable`, `alpha`, `beta` (legacy `unstable` → `alpha`) |
 | `--version` | Base version. Flex: `vX.Y.Z`. OT-2 internal: `YY.M.DNN`. OT-2 external: `YY.M.N` |
+| `--app-branch` | Branch to tag in the app monorepo (`opentrons` or `opentrons-ot2`) |
+| `--stack-branch REPO=BRANCH` | Branch to tag for a stack repo (repeatable; e.g. `oe-core=main`) |
 | `--skip-assumptions` | Omit the assumptions panel (cleaner agent output) |
 | `--non-interactive` | Never prompt; use defaults for omitted flags |
 
-**Defaults with `--non-interactive`:** path `flex`, release `external`, stability `stable`. Flex external version is inferred from the highest `chore_release-X.Y.Z` branch on `opentrons` (fallback: latest `v*` tag base). Flex internal version is inferred from the highest `ot3@X.Y.Z` tag merged into `edge`.
+**Defaults with `--non-interactive`:** path `flex`, release `external`, stability `stable`. Flex external version is inferred from the highest `chore_release-X.Y.Z` branch on `opentrons` (fallback: latest `v*` tag base). Flex internal version is inferred from the highest `ot3@X.Y.Z` base in the app repo tag catalog.
 
 **Examples:**
 
 ```bash
 just go --non-interactive --skip-assumptions --path ot2 --release-type internal --stability alpha
-just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v8.5.0
+just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0
+just go --non-interactive --skip-assumptions --path flex --release-type internal --stability alpha --version v4.0.0 --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main
 ```
 
-**Output includes:** latest-tag summary, change-since-tag tables, tag push order, per-repo tag plans (`git checkout` on `chore_release-*` for Flex external, then `git tag -a` / `git push` suggestions), app tag section, and a **Next steps** panel with `track-builds` and `invalidate-cloudfront` commands.
+**Output includes:** latest-tag summary (stable / alpha / beta lanes at the semver base), release flavor lanes panel, change-since-tag tables (same lane on release branch), tag push order, per-repo tag plans (`git checkout` when release branch differs from default, then `git tag -a` / `git push` suggestions), app tag section, and a **Next steps** panel with `track-builds` and `invalidate-cloudfront` commands.
 
 ### `just track-builds` (`automation/track_builds.py`)
 

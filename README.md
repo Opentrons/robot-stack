@@ -45,7 +45,7 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
   - `uv run just fix`
 - sync repos and inspect release state
   - `uv run just go`
-  - non-interactive example: `uv run just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0`
+  - non-interactive example: `uv run just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0 --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main`
 - verify a coordinated Flex tag exists in all three stack repos (before pushing the app tag)
   - `uv run just validate-release-tags --tag ot3@4.0.0-beta.0`
 - find GitHub Actions runs after pushing an app tag
@@ -64,9 +64,15 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 
 `robot-stack-infra` is always cloned and pulled for both paths as a reference repo. It is not included in release tables or tagging.
 
-Each repo uses isolation branches named `chore_release-<version>` during a **Flex external** release cycle. Flex **internal** and all **OT-2** releases tag default-branch HEAD instead (`edge` / `opentrons-develop` / `main`).
+**Default release branches:** Flex **external** prefers `chore_release-<version>` when that branch exists on the remote. Flex **internal** and OT-2 default to each repo's default branch (`edge` / `main` / `opentrons-develop`).
 
-For **Flex external** releases, `just go` prints `git checkout chore_release-<version>` before each suggested `git tag -a` command. Run that checkout in each repo before creating and pushing tags.
+**Branch overrides** (any path/channel):
+
+```bash
+just go ... --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main
+```
+
+When the release branch differs from the repo default, `just go` prints `git checkout <branch>` before suggested tag commands.
 
 ### Tag push order
 
@@ -86,6 +92,8 @@ Every firmware release commit needs a coordination tag (`ot3@*` or `ex*`). Add a
 Tag-based CI in `oe-core` (`build-refs`) resolves only the expected tag on each repo; missing tags fail instead of falling back to latest or default branch.
 
 In `just go`, Flex uses **stable**, **alpha**, or **beta** stability (legacy `unstable` maps to `alpha`). OT-2 tagging is unchanged.
+
+At a given semver base, **alpha and beta are independent release flavors** with separate counters. For example `ot3@4.0.0-alpha.3` and `ot3@4.0.0-beta.0` can coexist. Tag numbering reads the app monorepo catalog (`opentrons` for Flex). Change logs compare against the prior tag in the **same lane** on the release branch.
 
 | Repo | Internal | External |
 |---|---|---|
@@ -108,22 +116,22 @@ git push origin v9.1.0-alpha.7
 
 **Internal firmware example** (stack `ot3@4.0.0-beta.0`): same `ot3@*` on all three repos plus `vN` on firmware.
 
-**Internal prerelease trains** (same `X.Y.Z` base, different stability suffix):
+**Internal release flavors** (same `X.Y.Z` base; lanes are independent, not a promote-alpha-to-beta ladder):
 
-| Train | Stability in `go` | Tag example | Typical use |
+| Lane | Stability in `go` | Tag example | Typical use |
 |---|---|---|---|
-| VM isolation | `beta` | `ot3@4.0.0-beta.0` | Beta app channel; ship first when adopting coordinated tagging |
-| CRS | `alpha` | `ot3@4.0.0-alpha.4` | Alpha app channel; follow beta on the same base when both trains are active |
+| VM isolation | `beta` | `ot3@4.0.0-beta.0` | Beta app channel |
+| CRS | `alpha` | `ot3@4.0.0-alpha.4` | Alpha app channel; can follow beta on the same base |
 
-Pair beta then alpha when both channels need updates in the same cycle: beta desktop builds overwrite alpha updater YAML metadata (`generateUpdatesFilesForAllChannels`).
+When **both** beta and alpha channels need fresh builds in the **same cycle**, ship beta before alpha: beta desktop builds overwrite alpha updater YAML metadata (`generateUpdatesFilesForAllChannels`). That sequencing rule is for updater metadata only.
 
 Before pushing the app tag, run `just validate-release-tags --tag <app-tag>`. `go` prints this in the Next steps panel.
 
-**Example (June 2026):** recent internal alphas used base `4.0.0` (`ot3@4.0.0-alpha.3` is the latest). The first coordinated internal release on that line is **`ot3@4.0.0-beta.0`** on opentrons/oe-core, plus **`ot3@4.0.0-beta.0`** and the next **`vN`** on firmware.
+**Example (4.0.0 internal):** alphas at `ot3@4.0.0-alpha.3`; beta lane may already have `ot3@4.0.0-beta.0` from another branch. A new alpha from `edge` suggests `ot3@4.0.0-alpha.4`.
 
 ```bash
-just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0
-just validate-release-tags --tag ot3@4.0.0-beta.0
+just go --non-interactive --skip-assumptions --path flex --release-type internal --stability alpha --version v4.0.0 --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main
+just validate-release-tags --tag ot3@4.0.0-alpha.4
 ```
 
 ### Track release builds

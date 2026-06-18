@@ -17,8 +17,8 @@ from automation.go import (
     RepoSpec,
     RepoState,
     all_integer_firmware_version_numbers,
+    get_flex_app_tag_suggestion,
     get_flex_coordinated_stack_tag_plan,
-    get_next_flex_app_tag_command,
     get_next_ot3_firmware_version_tag,
     normalize_flex_stability,
     tags_merged_on_branch,
@@ -61,27 +61,41 @@ class NormalizeFlexStabilityTests(unittest.TestCase):
 
 
 class FlexAppTagTests(unittest.TestCase):
-    def test_internal_beta_tag(self) -> None:
-        state = RepoState(
-            branch_tags={
-                "edge": {
-                    "ot3@": ["ot3@8.5.0-beta.0"],
-                }
-            }
+    def test_internal_beta_tag_uses_lane_counter(self) -> None:
+        app_tags = ["ot3@8.5.0-beta.0", "ot3@8.5.0-alpha.1"]
+        suggestion = get_flex_app_tag_suggestion(
+            app_tags,
+            [],
+            "internal",
+            "beta",
+            "v8.5.0",
+            branch="edge",
         )
-        tag = get_next_flex_app_tag_command(state, "edge", "internal", "beta", "v8.5.0")
-        self.assertEqual(tag, "ot3@8.5.0-beta.1")
+        self.assertEqual(suggestion.tag, "ot3@8.5.0-beta.1")
+
+    def test_internal_alpha_independent_of_beta(self) -> None:
+        app_tags = ["ot3@10.0.0-beta.0", "ot3@10.0.0-alpha.2"]
+        suggestion = get_flex_app_tag_suggestion(
+            app_tags,
+            ["ot3@10.0.0-alpha.2"],
+            "internal",
+            "alpha",
+            "v10.0.0",
+            branch="edge",
+        )
+        self.assertEqual(suggestion.tag, "ot3@10.0.0-alpha.3")
 
     def test_external_alpha_tag(self) -> None:
-        state = RepoState(branch_tags={"chore_release-10.0.0": {"v": ["v10.0.0-alpha.0"]}})
-        tag = get_next_flex_app_tag_command(
-            state,
-            "chore_release-10.0.0",
+        app_tags = ["v10.0.0-alpha.0"]
+        suggestion = get_flex_app_tag_suggestion(
+            app_tags,
+            [],
             "external",
             "alpha",
             "v10.0.0",
+            branch="chore_release-10.0.0",
         )
-        self.assertEqual(tag, "v10.0.0-alpha.1")
+        self.assertEqual(suggestion.tag, "v10.0.0-alpha.1")
 
 
 class FlexCoordinatedStackTagPlanTests(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Flex coordinated tagging and release sequencing documentation for GitHub Pages."""
+"""Flex coordinated tagging and release channel hierarchy documentation for GitHub Pages."""
 
 from __future__ import annotations
 
@@ -332,28 +332,28 @@ def _updater_yaml_cascade() -> str:
 
 
 def _paired_release_svg() -> str:
-    """Timeline SVG for beta-then-alpha paired release (both pipelines)."""
+    """Timeline SVG for beta-then-alpha updater YAML sequencing when both channels update."""
     return """
     <svg class="seq-diagram" viewBox="0 0 760 220" role="img"
-         aria-label="Paired beta then alpha release sequence">
-      <title>Beta then alpha release sequence</title>
+         aria-label="Beta then alpha publish sequence for updater YAML">
+      <title>Beta then alpha publish sequence</title>
       <rect class="lane" x="8" y="8" width="744" height="52" rx="8"/>
-      <text x="20" y="30" font-weight="700">1. Publish Beta</text>
-      <text class="mono" x="20" y="48">e.g. ot3@8.5.0-beta.1 or v10.0.0-beta.1 (+ ex* on firmware)</text>
+      <text x="20" y="30" font-weight="700">1. Publish a Beta desktop build</text>
+      <text x="20" y="48" fill="var(--muted)">Beta channel users receive the new build</text>
       <rect class="step-beta" x="520" y="18" width="220" height="32" rx="6"/>
-      <text class="step-label" x="630" y="38" text-anchor="middle">Beta + Alpha YAML updated</text>
+      <text class="step-label" x="630" y="38" text-anchor="middle">beta.yml + alpha.yml updated</text>
 
       <rect class="lane" x="8" y="72" width="744" height="52" rx="8"/>
-      <text x="20" y="94" font-weight="700">2. Gap: Alpha temporarily on Beta</text>
-      <text class="mono" x="20" y="112">Alpha users may receive the Beta build until step 3 completes</text>
+      <text x="20" y="94" font-weight="700">2. Gap: Alpha channel temporarily on Beta</text>
+      <text x="20" y="112" fill="var(--muted)">Alpha users may see the Beta build until step 3</text>
       <rect class="step-warn" x="520" y="82" width="220" height="32" rx="6"/>
       <text class="step-label" x="630" y="102" text-anchor="middle">Risk if Alpha not restored</text>
 
       <rect class="lane" x="8" y="136" width="744" height="52" rx="8"/>
-      <text x="20" y="158" font-weight="700">3. Publish Alpha</text>
-      <text class="mono" x="20" y="176">e.g. ot3@8.5.0-alpha.N or v10.0.0-alpha.N (+ ex* on firmware)</text>
+      <text x="20" y="158" font-weight="700">3. Publish an Alpha desktop build</text>
+      <text x="20" y="176" fill="var(--muted)">Alpha channel users receive the intended Alpha build</text>
       <rect class="step-alpha" x="520" y="146" width="220" height="32" rx="6"/>
-      <text class="step-label" x="630" y="166" text-anchor="middle">Alpha YAML restored</text>
+      <text class="step-label" x="630" y="166" text-anchor="middle">alpha.yml restored</text>
 
       <rect class="lane" x="8" y="200" width="744" height="16" rx="4" fill="none" stroke="none"/>
       <rect class="step-ok" x="8" y="196" width="744" height="20" rx="6"/>
@@ -376,8 +376,10 @@ def render_flex_coordinated_tags_page() -> str:
 
     <p>Six common flavors: the <strong>internal</strong> and <strong>external</strong> pipelines,
     each with <strong>stable</strong>, <strong>beta</strong>, or <strong>alpha</strong> stability.
+    At one semver base, alpha and beta are <strong>independent lanes</strong> with separate counters.
     See also
-    <a href="flex-release-sequencing.html">Flex release sequencing</a> for beta-then-alpha ordering.</p>
+    <a href="release-channel-hierarchy.html">Release channel hierarchy</a> for how alpha, beta, and
+    stable updater channels interact on Flex and OT-2.</p>
 
     <div class="legend">
       <div class="legend-item"><span class="legend-swatch" style="background:#7c3aed"></span>
@@ -427,108 +429,110 @@ just validate-release-tags --tag v10.0.0-alpha.2</pre>
     )
 
 
-def render_flex_release_sequencing_page() -> str:
-    """Render beta/alpha pairing and app updater sequencing."""
+def render_release_channel_hierarchy_page() -> str:
+    """Render alpha/beta/stable channel hierarchy for Flex and OT-2 desktop updaters."""
     body = f"""
-    <p class="lede">We support separate <strong>Beta</strong> and <strong>Alpha</strong> release trains
-    that may ship different feature sets.</p>
+    <p class="lede">Opentrons desktop apps on <strong>Flex</strong> and <strong>OT-2</strong> use
+    electron-updater with three stability channels: <strong>alpha</strong>, <strong>beta</strong>,
+    and <strong>stable</strong> (<code>latest</code>). Each channel reads a YAML manifest on the
+    build CDN (<code>alpha.yml</code>, <code>beta.yml</code>, <code>latest.yml</code>). This page
+    explains the traditional release model those channels reflect, why the YAML files overwrite
+    each other the way they do, and how we still ship different build flavors on alpha and beta
+    in parallel.</p>
 
+    <h2>The traditional release model</h2>
+    <p>Most software teams treat prerelease quality as a <strong>hierarchy of confidence</strong>:</p>
+    <ol>
+      <li><strong>Alpha</strong> builds go to a small, controlled audience first. The goal is early
+      feedback and shaking out obvious defects before wider exposure.</li>
+      <li>When alpha builds reach enough stability, a <strong>beta</strong> build is published to a
+      larger customer set. Beta is still prerelease, but it represents higher confidence than alpha.</li>
+      <li>Testing continues. Teams may ship <strong>further alpha builds</strong> for narrow validation
+      and <strong>further beta builds</strong> for broader soak testing until both channels meet their
+      quality bars.</li>
+      <li>When confidence is high enough, a <strong>stable</strong> release replaces prerelease
+      channels for general availability.</li>
+    </ol>
+    <p>That ladder is why electron-updater exposes separate channel YAMLs and a setting
+    (<code>generateUpdatesFilesForAllChannels</code>) that writes lower-stability metadata when a
+    higher-stability build publishes: a stable release should be visible to everyone who opted into
+    beta or alpha, and a beta release should not leave alpha users stranded on an older build when
+    beta is strictly ahead.</p>
+
+    <h2>How YAML overwrite preserves the hierarchy</h2>
+    <p>When a desktop build publishes, electron-updater updates one or more YAML files on the CDN.
+    Higher-stability publishes overwrite metadata for lower channels:</p>
+    {_updater_yaml_cascade()}
+    <p><strong>Key behavior:</strong> publishing a <strong>beta</strong> build updates both
+    <code>beta.yml</code> and <code>alpha.yml</code>. Publishing an <strong>alpha</strong> build
+    updates only <code>alpha.yml</code>. Publishing <strong>stable</strong> updates all three.</p>
+    <p>This applies on every Opentrons app host that serves desktop updater YAMLs, including Flex
+    internal (<code>ot3-development.builds.opentrons.com</code>), Flex external
+    (<code>builds.opentrons.com</code>), OT-2 internal
+    (<code>ot2-development.builds.opentrons.com</code>), and OT-2 external
+    (<code>ot2.builds.opentrons.com</code>).</p>
+
+    <h2>Parallel flavors, not only a straight ladder</h2>
     <div class="panel">
-      <p><strong>Applies to both pipelines.</strong> The YAML override behavior below occurs on the
-      <strong>internal stack</strong> (<code>ot3@*</code> tags,
-      <code>ot3-development.builds.opentrons.com</code>) and the <strong>external stack</strong>
-      (<code>v*</code> / <code>ex*</code> tags, <code>builds.opentrons.com</code>). Stability channels
-      are <strong>stable</strong>, <strong>beta</strong>, and <strong>alpha</strong>; internal vs
-      external is a pipeline distinction, not a channel.</p>
+      <p>The hierarchy above describes <strong>who should receive which build</strong> through the
+      updater. Our release process also needs <strong>flexibility</strong>: alpha and beta can carry
+      <strong>different build flavors at the same time</strong>, not only a single line that always
+      promotes alpha → beta → stable.</p>
+      <p>Example: a beta build may target VM isolation validation while a separate alpha build targets
+      CRS, both active during the same development cycle. That is normal. The updater hierarchy still
+      applies to metadata on the CDN; it does not require every alpha to become the next beta before
+      either channel moves forward.</p>
     </div>
 
-    <h2>Why sequencing matters</h2>
-    <p>Electron-updater YAML files (<code>latest.yml</code>, <code>beta.yml</code>,
-    <code>alpha.yml</code>) form a hierarchy by stability. A higher-stability release overwrites
-    metadata for lower stability channels:</p>
-    {_updater_yaml_cascade()}
-    <p><strong>Key behavior:</strong> publishing a <strong>Beta</strong> release updates both
-    <code>beta.yml</code> and <code>alpha.yml</code>. A follow-up <strong>Alpha</strong> release is
-    required to restore Alpha metadata to the intended Alpha build.</p>
-
-    <h2>Decision 1: Coordinated release tags</h2>
-    <p>Release builds no longer resolve &ldquo;latest&rdquo; <code>oe-core</code> or
-    <code>ot3-firmware</code> tags. Each build uses explicit coordinated tags; missing tags fail the
-    build rather than silently picking another commit
-    (<a href="https://github.com/Opentrons/oe-core/pull/327">oe-core #327</a>,
-    <a href="https://github.com/Opentrons/oe-core/pull/329">#329</a>).</p>
-    <p>Visual reference:
-    <a href="flex-coordinated-tags.html">Flex coordinated tagging (all six flavors)</a>.</p>
-
-    <h2>Decision 2: Paired Beta and Alpha releases</h2>
-    <p>Beta and Alpha are one coordinated operation. Ship <strong>Beta first</strong>, then
-    <strong>Alpha</strong>. Do not announce the release complete until both are published and
-    updater YAMLs are verified on the correct pipeline host.</p>
-
-    <table>
-      <thead><tr><th>Step</th><th>Stability</th><th>Internal pipeline</th><th>External pipeline</th></tr></thead>
-      <tbody>
-        <tr><td>1</td><td>Beta</td>
-            <td><code>ot3@8.5.0-beta.1</code></td>
-            <td><code>v10.0.0-beta.1</code> (+ <code>ex10.0.0-beta.1</code> on firmware)</td></tr>
-        <tr><td>2</td><td>Alpha</td>
-            <td><code>ot3@8.5.0-alpha.N</code></td>
-            <td><code>v10.0.0-alpha.N</code> (+ <code>ex10.0.0-alpha.N</code> on firmware)</td></tr>
-      </tbody>
-    </table>
-    <p>On the external pipeline, Beta may come from a feature branch; Alpha typically follows from
-    <code>chore_release-10.0.0</code> on the main release line. Internal pipeline tags default-branch
-    HEAD unless your process uses isolation branches.</p>
+    <h2>When both alpha and beta need fresh builds</h2>
+    <p>If you intend to update <strong>both</strong> channels in the same release cycle, publish
+    <strong>beta before alpha</strong>. A beta desktop publish overwrites <code>alpha.yml</code> with
+    the beta build until an alpha publish restores alpha metadata to the intended alpha build.</p>
+    <p>That ordering rule is about <strong>updater YAML only</strong>. It does not mean alpha must
+    always precede beta in development, and it does not replace the traditional confidence ladder.
+    It prevents alpha-channel users from staying on a beta build after you meant to ship a distinct
+    alpha.</p>
     {_paired_release_svg()}
 
     <h2>Failure risk</h2>
     <div class="panel">
-      <p>If Beta succeeds but the follow-up Alpha fails, <strong>Alpha users keep seeing the Beta
-      build</strong> until Alpha metadata is restored. Treat the pair as incomplete until:</p>
+      <p>If a beta publish succeeds but the follow-up alpha publish fails or is skipped,
+      <strong>alpha-channel users keep seeing the beta build</strong> until alpha metadata is
+      restored. Treat a paired cycle as incomplete until:</p>
       <ul>
-        <li>Beta artifacts and metadata are published</li>
-        <li>Alpha artifacts and metadata are published</li>
-        <li><code>beta.yml</code> resolves to the Beta release</li>
-        <li><code>alpha.yml</code> resolves to the intended Alpha release</li>
-        <li>GitHub Actions build summary shows coordinated app, oe-core, and firmware refs</li>
+        <li>Beta artifacts and <code>beta.yml</code> point at the intended beta build</li>
+        <li>Alpha artifacts and <code>alpha.yml</code> point at the intended alpha build</li>
+        <li>You have verified both YAML URLs on the correct pipeline host</li>
       </ul>
     </div>
 
-    <h2>Operational checklist</h2>
-    <h3>Before publishing</h3>
-    <ol class="checklist">
-      <li>Confirm intended commits in <code>opentrons</code>, <code>oe-core</code>, and
-      <code>ot3-firmware</code>.</li>
-      <li>Create coordinated tags in all required repos (firmware first, app last).</li>
-      <li>Confirm firmware commit has exactly one integer <code>vN</code>; reuse if unchanged.</li>
-      <li>Confirm pipeline (internal vs external) and stability (Beta vs Alpha) intent.</li>
-      <li>Run <code>just validate-release-tags --tag &lt;app-tag&gt;</code> before pushing the app tag.</li>
-    </ol>
-
-    <h3>After publishing (each step of the pair)</h3>
-    <ol class="checklist">
-      <li><code>just track-builds --non-interactive --path flex --tag &lt;app-tag&gt; --wait</code></li>
-      <li>Verify updater YAMLs on the correct pipeline host (external:
-      <code>builds.opentrons.com</code>; internal:
-      <code>ot3-development.builds.opentrons.com</code>).</li>
-      <li>After both Beta and Alpha complete:
-      <code>just invalidate-cloudfront --non-interactive --path flex --tag &lt;app-tag&gt;</code></li>
-    </ol>
-
-    <h2>Repeating the pattern</h2>
-    <p>Additional Beta builds are allowed. <strong>Every new Beta requires a follow-up
-    Alpha</strong> before the coordinated release is complete. Plan with
-    <code>just go --path flex --release-type internal|external --stability beta|alpha</code>.</p>
+    <h2>Stable releases</h2>
+    <p>A stable desktop publish updates <code>latest.yml</code>, <code>beta.yml</code>, and
+    <code>alpha.yml</code>. Users on any prerelease channel who are eligible for stable will see the
+    stable build through the same hierarchy. Plan stable only when alpha and beta validation for that
+    cycle is complete.</p>
 
     <h2>Summary</h2>
     <ul>
-      <li><strong>Coordinated tags</strong> make release composition explicit and reproducible.</li>
-      <li><strong>Beta then Alpha</strong> preserves separate Beta and Alpha trains without changing
-      updater YAML generation or S3 upload behavior.</li>
+      <li><strong>Traditional model:</strong> alpha (narrow) → beta (broader) → stable, with iteration
+      on alpha and beta until confidence is high enough.</li>
+      <li><strong>YAML cascade:</strong> electron-updater keeps lower channels aligned with higher
+      stability publishes so the hierarchy is preserved on the CDN.</li>
+      <li><strong>Parallel flavors:</strong> alpha and beta can represent different active build lines;
+      the hierarchy governs updater metadata, not a single mandatory promotion path.</li>
+      <li><strong>Paired cycle:</strong> when both channels need new builds, publish beta then alpha so
+      <code>alpha.yml</code> ends on the correct build.</li>
+      <li><strong>Flex and OT-2:</strong> same channel filenames and overwrite rules on internal and
+      external app hosts.</li>
     </ul>
     """
     return _wrap_strategy_page(
-        "flex-release-sequencing.html",
-        "Flex release sequencing",
+        "release-channel-hierarchy.html",
+        "Release channel hierarchy",
         body,
     )
+
+
+def render_flex_release_sequencing_page() -> str:
+    """Deprecated alias for :func:`render_release_channel_hierarchy_page`."""
+    return render_release_channel_hierarchy_page()

@@ -9,7 +9,7 @@ import semver
 
 CHORE_RELEASE_BRANCH_RE = re.compile(r"^chore_release-(?P<version>\d+\.\d+\.\d+)$")
 FLEX_APP_TAG_BASE_RE = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)(?:-alpha\.\d+)?$")
-FLEX_INTERNAL_APP_TAG_BASE_RE = re.compile(r"^ot3@(?P<version>\d+\.\d+\.\d+)(?:-alpha\.\d+)?$")
+FLEX_INTERNAL_APP_TAG_BASE_RE = re.compile(r"^ot3@(?P<version>\d+\.\d+\.\d+)(?:-(?:alpha|beta)\.\d+)?$")
 
 
 def parse_chore_release_version(branch_name: str) -> Optional[str]:
