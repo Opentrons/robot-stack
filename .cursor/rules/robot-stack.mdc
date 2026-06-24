@@ -64,9 +64,9 @@ Examples (May 26, 2026):
 - `internal@26.5.2601-alpha` (first alpha internal)
 - `internal@26.5.2602-alpha` (second alpha internal same day)
 
-**External app (`v` on opentrons-ot2):** patch **N** is monthly build counter **0–9** (first release in June 2026 → `v26.6.0`). Each external release in the month (stable, alpha, or beta) takes the next **N** slot. More than 10 external releases per month is a process failure.
+**External app (`v` on opentrons-ot2):** patch **N** is the monthly **stable** build counter **0–9** (first stable release in June 2026 → `v26.6.0`). Alpha and beta use numbered prereleases on the same `YY.M.N` base. Because `v26.6.0` outranks `v26.6.0-alpha.N`, alphas on `N=0` do not force the first stable to `v26.6.1`. **N** increments only for a second stable release in the same month. More than 10 stable external releases per month is a process failure.
 
-External app alpha/beta use semver prerelease numbering on that build's base: `v26.5.1-alpha.0`, `v26.5.1-alpha.1`, `v26.5.1-beta.0`. After `v26.5.0` stable, the next build is `v26.5.1-alpha.0`, not `v26.5.0-alpha.0`.
+External app alpha/beta use semver prerelease numbering on that build line's base: `v26.6.0-alpha.0`, `v26.6.0-alpha.1`, `v26.6.0-beta.0`. After `v26.6.0` stable, the next alpha cycle is `v26.6.1-alpha.0`, not `v26.6.0-alpha.0`.
 
 **External robot OS (`v` on buildroot):** independent traditional semver line (for example `v1.19.9`). `go` patch-bumps from the latest merged traditional tag; it does not mirror the app calendar version.
 
@@ -114,12 +114,12 @@ When **both** beta and alpha channels need fresh builds in the **same cycle**, s
 
 | Repo | Internal | External |
 |---|---|---|
-| `opentrons-ot2` (app) | `internal@YY.M.DNN`, alpha/beta bare suffix | `vYY.M.N`, alpha/beta `-alpha.N` / `-beta.N` (next monthly build slot) |
+| `opentrons-ot2` (app) | `internal@YY.M.DNN`, alpha/beta bare suffix | `vYY.M.N`, alpha/beta `-alpha.N` / `-beta.N` on the build line's base |
 | `buildroot` (robot OS) | same calendar version as app | independent `vX.Y.Z` line; patch bump from latest merged traditional tag |
 
 Tag suggestion rules in `automation/go.py`:
 
-- **App (`opentrons-ot2`):** calendar semver from synced app tags. Stable external: next monthly **N** (counts all external builds in the month). Alpha/beta external: next **N** for a new build line, or increment prerelease on the current alpha/beta base. Internal: same-day build counter in patch.
+- **App (`opentrons-ot2`):** calendar semver from synced app tags. Stable external: reuse `N` when alpha/beta tags exist on that base but no stable yet (`v26.6.0` after `v26.6.0-alpha.N`); otherwise bump **N** for the next stable in the month. Alpha/beta external: next **N** only after a stable on the current line, or increment prerelease on the current alpha/beta base. Internal: same-day build counter in patch.
 - **Robot OS (`buildroot`, internal):** same calendar allocation as the app.
 - **Robot OS (`buildroot`, external):** patch bump from the latest merged traditional `v*` tag (for example `v1.19.9` → `v1.19.10`). Ignores calendar app tags like `v26.5.0`.
 

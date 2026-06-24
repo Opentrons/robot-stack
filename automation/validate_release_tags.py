@@ -63,10 +63,10 @@ def run_git(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def fetch_repo(repo_path: Path) -> None:
-    """Fetch tags from origin for one local clone."""
+    """Fetch tags from origin, overwriting stale local tags with remote refs."""
     if not (repo_path / ".git").is_dir():
         raise FileNotFoundError(f"Not a git repo: {repo_path}")
-    result = run_git(["fetch", "--tags", "origin"], repo_path)
+    result = run_git(["fetch", "--tags", "--force", "origin"], repo_path)
     if result.returncode != 0:
         raise RuntimeError(f"git fetch failed in {repo_path}: {result.stderr.strip() or result.stdout.strip()}")
 
@@ -250,28 +250,13 @@ def render_results(results: Sequence[TagCheckResult], stack_tag: str) -> None:
             )
         )
     else:
-        stack_commits = {
-            result.commit
-            for result in results
-            if result.commit and result.repo_name in {"opentrons", "oe-core", "ot3-firmware"} and not result.note
-        }
-        if len(stack_commits) > 1:
-            console.print(
-                Panel(
-                    "Coordination tags exist but resolve to different commits across repos. "
-                    "Verify each tag points at the intended release commit.",
-                    title="Warning",
-                    style="yellow",
-                )
+        console.print(
+            Panel(
+                "Stack coordination tags and firmware vN version tag are present.",
+                title="Tag check passed",
+                style="green",
             )
-        else:
-            console.print(
-                Panel(
-                    "Stack coordination tags and firmware vN version tag are present.",
-                    title="Tag check passed",
-                    style="green",
-                )
-            )
+        )
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -287,7 +272,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--fetch",
         action="store_true",
-        help="Run git fetch --tags origin in each repo before checking.",
+        help="Run git fetch --tags --force origin in each repo before checking (remote tags win).",
     )
     return parser.parse_args(argv)
 

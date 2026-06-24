@@ -608,12 +608,15 @@ def render_ot2_external() -> str:
     <p><code>go</code> infers the next calendar base from existing app tags on the release branch
     (defaults to the current month in Eastern time when no tags exist yet).</p>
     <h3>App stable</h3>
-    <p>Find all external calendar tags (<code>vYY.M.N</code>, including alpha/beta) for the same year and month.
-    Increment <code>N</code>. More than 10 external releases in one month (<code>N &gt; 9</code>) is treated as an error.</p>
+    <p>Patch <code>N</code> counts <strong>stable</strong> releases in the calendar month. If alpha or beta tags
+    exist on a base but no stable tag yet (for example <code>v26.6.0-alpha.1</code>), the next stable reuses that
+    base (<code>v26.6.0</code>) because stable outranks prereleases in semver. Otherwise bump <code>N</code> for the
+    next stable in the month. More than 10 stable releases in one month (<code>N &gt; 9</code>) is treated as an error.</p>
     <h3>App alpha / beta</h3>
-    <p>Each new build in the month gets the next <code>N</code> slot. Prerelease numbers increment on that base:
-    <code>v26.5.0</code> (stable) then <code>v26.5.1-alpha.0</code>, <code>v26.5.1-alpha.1</code>, or
-    <code>v26.5.1-beta.0</code>, etc.</p>
+    <p>Alpha and beta use numbered prereleases on a monthly <code>YY.M.N</code> base. Increment
+    <code>-alpha.N</code> or <code>-beta.N</code> on the same base during QA. After
+    <code>v26.6.0</code> stable, start a new build line at the next <code>N</code>:
+    <code>v26.6.1-alpha.0</code>, <code>v26.6.1-beta.0</code>, etc.</p>
     <h3>buildroot stable</h3>
     <p>Patch-bump from the latest merged traditional <code>v*</code> tag on
     <code>opentrons-develop</code> (for example <code>v1.19.9</code> → <code>v1.19.10</code>).
@@ -647,16 +650,16 @@ def render_ot2_external() -> str:
       <table>
         <thead><tr><th>Stability</th><th>Tag example</th><th>Notes</th></tr></thead>
         <tbody>
-          <tr><td>Stable</td><td><code>v26.6.0</code>, <code>v26.6.2</code> (app)</td><td>Monthly counter <code>N</code> bumps for each external build; buildroot patch-bumps its own line (for example <code>v1.19.10</code>)</td></tr>
-          <tr><td>Alpha</td><td><code>v26.5.1-alpha.0</code>, <code>v26.5.1-alpha.1</code></td><td>Next <code>N</code> for a new build; increment prerelease on the same base</td></tr>
-          <tr><td>Beta</td><td><code>v26.5.1-beta.0</code></td><td>Same monthly <code>N</code> as alpha on that build line; increment <code>-beta.N</code> on the same base</td></tr>
+          <tr><td>Stable</td><td><code>v26.6.0</code>, <code>v26.6.1</code> (app)</td><td><code>N</code> bumps only for each stable release in the month; buildroot patch-bumps its own line (for example <code>v1.19.10</code>)</td></tr>
+          <tr><td>Alpha</td><td><code>v26.6.0-alpha.0</code>, <code>v26.6.1-alpha.0</code></td><td>Same <code>N</code> as the build line; increment prerelease on the same base</td></tr>
+          <tr><td>Beta</td><td><code>v26.6.0-beta.0</code></td><td>Same monthly <code>N</code> as alpha on that build line; increment <code>-beta.N</code> on the same base</td></tr>
         </tbody>
       </table>
-      <p>Alpha and beta share the monthly build counter <code>N</code> with stable releases.
-      After <code>v26.5.0</code> stable, the next alpha is <code>v26.5.1-alpha.0</code>, not
-      <code>v26.5.0-alpha.0</code>. QA cycles on the same base increment the prerelease number only.
-      See <a href="release-channel-hierarchy.html">release channel hierarchy</a> for how alpha, beta,
-      and stable updater YAMLs interact.</p>
+      <p>Alpha and beta do not consume the stable <code>N</code> slot: <code>v26.6.0</code> stable can follow
+      <code>v26.6.0-alpha.N</code> on the same base. After <code>v26.6.0</code> stable, the next alpha cycle is
+      <code>v26.6.1-alpha.0</code>, not <code>v26.6.0-alpha.0</code>. QA cycles on the same base increment the
+      prerelease number only. See <a href="release-channel-hierarchy.html">release channel hierarchy</a> for how alpha,
+      beta, and stable updater YAMLs interact.</p>
     </div>
     """
     return _wrap_page("ot2-external.html", "external releases", body, robot_name="OT-2")

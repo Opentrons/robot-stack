@@ -1,5 +1,9 @@
 """Suggest next OT-2 release tags from existing tags (release planning only).
 
+External app patch N counts stable releases in the calendar month. Alpha and beta tags
+use numbered prereleases on the same YY.M.N base; stable reuses that base when no stable
+tag exists yet (v26.6.0 after v26.6.0-alpha.N).
+
 Used by `just go` before a human pushes tags. Build/CI in opentrons-ot2 reads the pushed tag;
 it does not call these helpers.
 """
@@ -21,19 +25,36 @@ from automation.ot2_calendar_semver import (
 )
 
 
-def _max_external_release_num_in_month(existing_tags: set[str], release_date: date) -> int:
-    """Return the highest monthly build counter N already used this calendar month."""
-    release_nums: list[int] = []
+def _external_release_nums_in_month(
+    existing_tags: set[str],
+    release_date: date,
+    *,
+    stable_only: bool = False,
+    prerelease_only: bool = False,
+) -> set[int]:
+    """Return monthly build counter N values used in the calendar month."""
+    release_nums: set[int] = set()
     for tag in existing_tags:
         version = version_from_external_tag(tag)
         if version is None:
             continue
         try:
-            year, month, release_num, _, _ = decode_ot2_external_version(version)
+            year, month, release_num, tag_pre, tag_pre_num = decode_ot2_external_version(version)
         except ValueError:
             continue
-        if (year, month) == (release_date.year, release_date.month):
-            release_nums.append(release_num)
+        if (year, month) != (release_date.year, release_date.month):
+            continue
+        if stable_only and tag_pre is not None:
+            continue
+        if prerelease_only and (tag_pre is None or tag_pre_num is None):
+            continue
+        release_nums.add(release_num)
+    return release_nums
+
+
+def _max_external_release_num_in_month(existing_tags: set[str], release_date: date) -> int:
+    """Return the highest monthly build counter N already used this calendar month."""
+    release_nums = _external_release_nums_in_month(existing_tags, release_date)
     return max(release_nums, default=-1)
 
 
@@ -69,9 +90,16 @@ def infer_ot2_external_base_version(
     max_n = _max_external_release_num_in_month(existing_tags, release_date)
 
     if stability == "stable":
-        next_n = max_n + 1
+        stable_ns = _external_release_nums_in_month(existing_tags, release_date, stable_only=True)
+        prerelease_ns = _external_release_nums_in_month(existing_tags, release_date, prerelease_only=True)
+        # v26.6.0 ranks above v26.6.0-alpha.N, so alphas on N=0 do not consume the stable slot.
+        unpromoted = prerelease_ns - stable_ns
+        if unpromoted:
+            next_n = min(unpromoted)
+        else:
+            next_n = max(stable_ns, default=-1) + 1
         if next_n > 9:
-            raise ValueError("More than 10 external releases this month (N > 9)")
+            raise ValueError("More than 10 external stable releases this month (N > 9)")
         return encode_ot2_external_version(release_date.year, release_date.month, next_n)
 
     stability_bases = _external_stability_bases_in_month(existing_tags, release_date, stability)

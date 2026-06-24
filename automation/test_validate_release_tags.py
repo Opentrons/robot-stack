@@ -14,6 +14,7 @@ from automation.flex_coordinated_tags import (
 )
 from automation.validate_release_tags import (
     check_tag_in_repo,
+    fetch_repo,
     is_flex_stack_coordination_tag,
 )
 
@@ -52,6 +53,30 @@ class CoordinatedTagSchemeTests(unittest.TestCase):
             stack_coordinated_tag_to_firmware_tag("v9.1.0-alpha.7"),
             "ex9.1.0-alpha.7",
         )
+
+
+class FetchRepoTests(unittest.TestCase):
+    """fetch_repo force-updates local tags from origin."""
+
+    def test_fetch_uses_force_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+            def fake_run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+                self.assertEqual(args, ["fetch", "--tags", "--force", "origin"])
+                self.assertEqual(cwd, repo)
+                return completed
+
+            import automation.validate_release_tags as validate_module
+
+            original = validate_module.run_git
+            validate_module.run_git = fake_run_git  # type: ignore[method-assign]
+            try:
+                fetch_repo(repo)
+            finally:
+                validate_module.run_git = original
 
 
 class CheckTagInRepoTests(unittest.TestCase):

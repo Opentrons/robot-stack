@@ -171,16 +171,17 @@ Same-day follow-ups increment the build number in the patch (`2601` → `2602`).
 
 ### External (`v`)
 
-**App (`opentrons-ot2`):** patch **N** is the monthly build counter, **starting at 0**. Each external release in the month (stable, alpha, or beta) gets the next **N** slot. At most 10 external releases per month (`N` = 0–9).
+**App (`opentrons-ot2`):** patch **N** is the monthly **stable** build counter, **starting at 0**. Alpha and beta builds use numbered prereleases on the same `YY.M.N` base (`v26.6.0-alpha.0`, `v26.6.0-beta.0`). Because `v26.6.0` outranks `v26.6.0-alpha.N`, the first stable release in a month can share `N=0` with prior alphas on that base. **N** increments only for a second stable release in the same month. At most 10 stable external releases per month (`N` = 0–9).
 
 | Example | Meaning |
 |---|---|
-| `v26.6.0` | First external app release in June 2026 |
-| `v26.6.1-alpha.0` | Second external build that month (first alpha on base `26.6.1`) |
-| `v26.6.1-alpha.1` | Another alpha QA cycle on the same base |
-| `v26.6.2` | Third external build that month (stable) |
+| `v26.6.0-alpha.0` | First alpha in June 2026 |
+| `v26.6.0-alpha.1` | Another alpha QA cycle on the same base |
+| `v26.6.0` | First stable external release that month (same `N=0` as the alphas) |
+| `v26.6.1-alpha.0` | New alpha cycle after `v26.6.0` stable |
+| `v26.6.1` | Second stable external release in June |
 
-External alpha and beta app builds use standard semver prerelease numbering (`-alpha.0`, `-alpha.1`, `-beta.0`, …) on the monthly **YY.M.N** base for that build. Prerelease numbers increment on a fixed base; starting a new build in the month bumps **N**.
+External alpha and beta app builds use standard semver prerelease numbering (`-alpha.0`, `-alpha.1`, `-beta.0`, …) on the monthly **YY.M.N** base for that build line. Prerelease numbers increment on a fixed base. After `v26.6.0` stable, the next alpha is `v26.6.1-alpha.0`, not `v26.6.0-alpha.0`.
 
 **Robot OS (`buildroot`):** external stable tags follow the repo's independent traditional semver line, for example `v1.19.9` → `v1.19.10`. They do not use the app calendar version.
 
@@ -188,7 +189,7 @@ External alpha and beta app builds use standard semver prerelease numbering (`-a
 
 | Channel | Repo | Stable | Alpha | Beta |
 |---|---|---|---|---|
-| External | `opentrons-ot2` | `v26.6.0` | `v26.6.1-alpha.0` | `v26.6.1-beta.0` |
+| External | `opentrons-ot2` | `v26.6.0` | `v26.6.0-alpha.0` | `v26.6.0-beta.0` |
 | External | `buildroot` | `v1.19.10` | patch bump on traditional line | patch bump on traditional line |
 | Internal | both | `internal@26.5.2601` | `internal@26.5.2601-alpha` | `internal@26.5.2601-beta` |
 
