@@ -19,6 +19,7 @@ import yaml
 
 from automation.asset_urls import APP_CHANNEL_YAMLS, AssetChannel, app_manifest_url, app_yaml_url, robot_manifest_url
 from automation.go import decode_ot2_external_version, decode_ot2_internal_version
+from automation.release import robot_manifest_production_entries, robot_manifest_release_keys
 from automation.site_nav import render_site_header, robot_name_html, site_nav_css
 
 DEFAULT_LIMIT = 10
@@ -61,6 +62,7 @@ class ReleasePlatformConfig:
     pipeline_footnote: str
     legacy_app_host: Optional[str] = None
     legacy_app_host_note: Optional[str] = None
+    show_robot_manifest_key: bool = False
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,7 @@ class RobotReleaseRow:
     version_url: str
     release_notes: str
     workflow_run_id: Optional[str] = None
+    manifest_key: Optional[str] = None
 
 
 @dataclass
@@ -269,6 +272,7 @@ def parse_robot_releases(
     limit: int,
     config: ReleasePlatformConfig,
     run_pattern: re.Pattern[str],
+    release_keys: Optional[Dict[str, str]] = None,
 ) -> List[RobotReleaseRow]:
     """Parse robot releases.json production entries."""
     rows: List[RobotReleaseRow] = []
@@ -283,6 +287,7 @@ def parse_robot_releases(
                 version_url=entry.get("version", ""),
                 release_notes=entry.get("releaseNotes", ""),
                 workflow_run_id=extract_robot_run_id(full_image, run_pattern),
+                manifest_key=release_keys.get(version) if release_keys else None,
             )
         )
     return rows
@@ -314,9 +319,16 @@ async def fetch_channel_snapshot(
     if robot_err:
         snapshot.errors.append(robot_err)
     elif isinstance(robot_data, dict):
-        production = robot_data.get("production", {})
-        if isinstance(production, dict):
-            snapshot.robot_releases = parse_robot_releases(production, limit, config, config.robot_run_pattern)
+        production = robot_manifest_production_entries(robot_data)
+        if production:
+            release_keys = robot_manifest_release_keys(robot_data) if config.show_robot_manifest_key else None
+            snapshot.robot_releases = parse_robot_releases(
+                production,
+                limit,
+                config,
+                config.robot_run_pattern,
+                release_keys=release_keys,
+            )
 
     yaml_results = await asyncio.gather(*[fetch_yaml_channel(client, channel, filename) for filename in APP_CHANNEL_YAMLS])
     snapshot.yaml_channels = [item for item in yaml_results if item.error != "not published"]
@@ -463,7 +475,29 @@ def render_app_releases(releases: Sequence[AppReleaseRow]) -> str:
     """
 
 
-def render_robot_releases(releases: Sequence[RobotReleaseRow], robot_repo: str) -> str:
+def render_robot_manifest_key_badge(manifest_key: Optional[str]) -> str:
+    """Render a manifest key indicator for one robot release row."""
+    if manifest_key == "productionV2":
+        return (
+            '<span class="manifest-key manifest-key-v2" '
+            'title="Robots on 9.1.1+ download updates from productionV2">'
+            "<code>productionV2</code></span>"
+        )
+    if manifest_key == "production":
+        return (
+            '<span class="manifest-key manifest-key-legacy" '
+            'title="Legacy key; robots on 9.0.0 and earlier read production">'
+            "<code>production</code></span>"
+        )
+    return "n/a"
+
+
+def render_robot_releases(
+    releases: Sequence[RobotReleaseRow],
+    robot_repo: str,
+    *,
+    show_manifest_key: bool = False,
+) -> str:
     """Render recent robot OS releases."""
     if not releases:
         return "<p><em>No robot releases found.</em></p>"
@@ -474,8 +508,10 @@ def render_robot_releases(releases: Sequence[RobotReleaseRow], robot_repo: str) 
             if item.workflow_run_id
             else "n/a"
         )
+        key_cell = f"<td>{render_robot_manifest_key_badge(item.manifest_key)}</td>" if show_manifest_key else ""
         rows.append(
             f"<tr><td><code>{esc(item.version)}</code></td>"
+            f"{key_cell}"
             f"<td>{run_link}</td>"
             f"<td>{link(item.full_image, 'full image')}</td>"
             f"<td>{link(item.system, 'system')}</td>"
@@ -483,11 +519,12 @@ def render_robot_releases(releases: Sequence[RobotReleaseRow], robot_repo: str) 
             f"<td>{link(item.release_notes, 'notes')}</td></tr>"
         )
     body = "".join(rows)
+    key_header = "<th>Manifest key</th>" if show_manifest_key else ""
     return f"""
     <table>
       <thead>
         <tr>
-          <th>Version</th><th>Build job</th><th>Full image</th><th>System</th><th>Version file</th><th>Notes</th>
+          <th>Version</th>{key_header}<th>Build job</th><th>Full image</th><th>System</th><th>Version file</th><th>Notes</th>
         </tr>
       </thead>
       <tbody>{body}</tbody>
@@ -500,6 +537,8 @@ def render_manifest_authority_note() -> str:
     return """
       <p class="note manifest-note">
         <strong>Robot OS:</strong> <code>releases.json</code> is the source of truth for on-robot updates.
+        Flex robots on 9.1.1+ read the <code>productionV2</code> key; older entries remain under
+        <code>production</code>.
         <strong>Desktop app:</strong> channel YAML files (<code>latest.yml</code>, <code>latest-mac.yml</code>,
         <code>latest-linux.yml</code>, and prerelease YAMLs) are authoritative; electron-updater reads those
         directly. App <code>releases.json</code> is not the app updater source of truth: a CloudFront edge
@@ -529,7 +568,7 @@ def render_channel_section(snapshot: ChannelSnapshot, config: ReleasePlatformCon
       {render_app_releases(snapshot.app_releases)}
 
       <h3>Recent robot OS releases (releases.json)</h3>
-      {render_robot_releases(snapshot.robot_releases, config.robot_repo)}
+      {render_robot_releases(snapshot.robot_releases, config.robot_repo, show_manifest_key=config.show_robot_manifest_key)}
     </section>
     """
 
@@ -645,6 +684,27 @@ def render_html(
       padding-left: 1.1rem;
     }}
     .note, .warn {{ color: var(--muted); }}
+    .manifest-key {{
+      display: inline-block;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }}
+    .manifest-key code {{
+      background: transparent;
+      padding: 0;
+    }}
+    .manifest-key-v2 {{
+      color: var(--accent);
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }}
+    .manifest-key-legacy {{
+      color: var(--muted);
+      background: color-mix(in srgb, var(--muted) 10%, transparent);
+    }}
     .errors td:last-child {{ color: var(--warn); }}
   </style>
 </head>

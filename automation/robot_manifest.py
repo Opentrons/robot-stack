@@ -3,7 +3,7 @@ from typing import Optional, Tuple
 import httpx
 from rich.console import Console
 
-from automation.release import RobotReleasesCollection
+from automation.release import RobotReleasesCollection, robot_manifest_production_entries
 
 console: Console = Console()
 
@@ -15,9 +15,9 @@ async def fetch_robot_releases(
     try:
         r: httpx.Response = await client.get(url, timeout=10.0)
         r.raise_for_status()
-        prod = r.json().get("production", {})
+        prod = robot_manifest_production_entries(r.json())
         if not prod:
-            raise ValueError("no 'production' entries in JSON")
+            raise ValueError("no 'production' or 'productionV2' entries in JSON")
         coll = RobotReleasesCollection.from_production(prod)
         return label, coll, None
     except Exception as e:

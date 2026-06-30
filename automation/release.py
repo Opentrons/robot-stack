@@ -1,11 +1,44 @@
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import semver
 
 INTERNAL = "internal"
 EXTERNAL = "external"
 RELEASE_CHANNELS = [INTERNAL, EXTERNAL]
+
+
+def _robot_manifest_buckets(
+    manifest: Dict[str, Any],
+) -> tuple[Dict[str, Dict[str, str]], Dict[str, Dict[str, str]]]:
+    """Return legacy and V2 robot release maps from a manifest."""
+    legacy = manifest.get("production", {})
+    v2 = manifest.get("productionV2", {})
+    if not isinstance(legacy, dict):
+        legacy = {}
+    if not isinstance(v2, dict):
+        v2 = {}
+    return legacy, v2
+
+
+def robot_manifest_production_entries(manifest: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    """Return robot release entries from an ot*-oe ``releases.json`` manifest.
+
+    Flex publishes new robot OS builds under ``productionV2`` so pre-9.1.1 robots
+    keep reading the legacy ``production`` key. Merge both maps with V2 winning on
+    duplicate version keys.
+    """
+    legacy, v2 = _robot_manifest_buckets(manifest)
+    merged: Dict[str, Dict[str, str]] = {**legacy, **v2}
+    return merged
+
+
+def robot_manifest_release_keys(manifest: Dict[str, Any]) -> Dict[str, str]:
+    """Map each robot release version to its manifest key name."""
+    legacy, v2 = _robot_manifest_buckets(manifest)
+    keys = {version: "production" for version in legacy}
+    keys.update({version: "productionV2" for version in v2})
+    return keys
 
 
 @dataclass

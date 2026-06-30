@@ -61,6 +61,7 @@ FLEX_CONFIG = ReleasePlatformConfig(
         "CloudFront for <code>builds.opentrons.com</code> is not invalidated by CI; run "
         "<code>just invalidate-cloudfront</code> manually after external app builds finish."
     ),
+    show_robot_manifest_key=True,
 )
 
 
