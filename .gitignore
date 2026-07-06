@@ -129,6 +129,8 @@ celerybeat.pid
 
 # Environments
 .env
+.secrets/
+*.crt
 .venv
 env/
 venv/
