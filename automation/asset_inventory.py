@@ -123,38 +123,57 @@ class ChannelSnapshot:
     errors: List[FetchError] = field(default_factory=list)
 
 
+# Higher scheme rank sorts above lower ranks in newest-first ordering. Legacy 8.x
+# semver must rank below calendar schemes so 26.x releases appear before 8.x.
+_OT2_SCHEME_EXTERNAL = 4
+_OT2_SCHEME_INTERNAL = 3
+_OT2_SCHEME_DEV = 2
+_OT2_SCHEME_LEGACY = 1
+_OT2_SCHEME_UNKNOWN = 0
+
+
+def _ot2_stability_rank(prerelease: Optional[str]) -> int:
+    """Rank stability for newest-first sorting: stable above beta above alpha."""
+    return {"alpha": 1, "beta": 2}.get(prerelease or "", 3)
+
+
 def ot2_version_sort_key(version: str) -> Tuple[Any, ...]:
     """Sort OT-2 versions newest-first, covering calendar, legacy, and dev builds."""
     clean = version.lstrip("v")
     try:
         year, month, day, build_num, prerelease = decode_ot2_internal_version(clean)
-        pre_rank = {"alpha": 1, "beta": 2}.get(prerelease or "", 0)
-        return (1, year, month, day, build_num, pre_rank, 0, "")
+        return (_OT2_SCHEME_INTERNAL, year, month, day, build_num, _ot2_stability_rank(prerelease))
     except ValueError:
         pass
     try:
         year, month, release_num, prerelease, pre_num = decode_ot2_external_version(clean)
-        pre_rank = {"alpha": 1, "beta": 2}.get(prerelease or "", 0)
-        return (2, year, month, release_num, pre_rank, pre_num or 0, 0, "")
+        return (
+            _OT2_SCHEME_EXTERNAL,
+            year,
+            month,
+            release_num,
+            _ot2_stability_rank(prerelease),
+            pre_num or 0,
+        )
     except ValueError:
         pass
     dev_match = OT2_DEV_VERSION_RE.match(clean)
     if dev_match:
         yy, month, patch, dev_num, dash_num = dev_match.groups()
-        return (3, int(yy), int(month), int(patch), int(dev_num or 0), int(dash_num or 0), 0, "")
+        return (_OT2_SCHEME_DEV, int(yy), int(month), int(patch), int(dev_num or 0), int(dash_num or 0))
     dash_match = OT2_DASH_BUILD_RE.match(clean)
     if dash_match:
         yy, month, patch, sub_build = dash_match.groups()
-        return (3, int(yy), int(month), int(patch), 0, int(sub_build), 0, "")
+        return (_OT2_SCHEME_DEV, int(yy), int(month), int(patch), 0, int(sub_build))
     dot_match = OT2_DOT_BUILD_RE.match(clean)
     if dot_match:
         yy, month, patch, sub_build = dot_match.groups()
-        return (3, int(yy), int(month), int(patch), 0, int(sub_build), 0, "")
+        return (_OT2_SCHEME_DEV, int(yy), int(month), int(patch), 0, int(sub_build))
     try:
         parsed = semver.VersionInfo.parse(clean)
-        return (4, parsed)
+        return (_OT2_SCHEME_LEGACY, parsed)
     except ValueError:
-        return (9, clean)
+        return (_OT2_SCHEME_UNKNOWN, clean)
 
 
 def sort_semver_versions_desc(versions: Sequence[str]) -> List[str]:
