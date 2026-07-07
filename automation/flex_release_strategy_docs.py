@@ -377,9 +377,10 @@ def render_flex_coordinated_tags_page() -> str:
     <p>Six common flavors: the <strong>internal</strong> and <strong>external</strong> pipelines,
     each with <strong>stable</strong>, <strong>beta</strong>, or <strong>alpha</strong> stability.
     At one semver base, alpha and beta are <strong>independent lanes</strong> with separate counters.
-    See also
-    <a href="release-channel-hierarchy.html">Release channel hierarchy</a> for how alpha, beta, and
-    stable updater channels interact on Flex and OT-2.</p>
+    Desktop updater YAML follows <strong>publish order</strong>, not tag order: beta overwrites
+    <code>alpha.yml</code>; alpha restores <code>alpha.yml</code> only. See
+    <a href="release-channel-hierarchy.html">Release channel hierarchy</a> for the full cascade and
+    paired-cycle sequencing.</p>
 
     <div class="legend">
       <div class="legend-item"><span class="legend-swatch" style="background:#7c3aed"></span>
@@ -463,14 +464,43 @@ def render_release_channel_hierarchy_page() -> str:
     <p>When a desktop build publishes, electron-updater updates one or more YAML files on the CDN.
     Higher-stability publishes overwrite metadata for lower channels:</p>
     {_updater_yaml_cascade()}
-    <p><strong>Key behavior:</strong> publishing a <strong>beta</strong> build updates both
-    <code>beta.yml</code> and <code>alpha.yml</code>. Publishing an <strong>alpha</strong> build
-    updates only <code>alpha.yml</code>. Publishing <strong>stable</strong> updates all three.</p>
+    <p><strong>Key behavior (asymmetric by stability):</strong></p>
+    <ul>
+      <li><strong>Beta publish</strong> writes <code>beta.yml</code> and <strong>also overwrites</strong>
+      <code>alpha.yml</code> with the beta build. <code>latest.yml</code> is unchanged.</li>
+      <li><strong>Alpha publish</strong> writes <code>alpha.yml</code> only. It does <strong>not</strong>
+      overwrite <code>beta.yml</code> or <code>latest.yml</code>. An alpha publish after a beta publish
+      <strong>restores</strong> <code>alpha.yml</code> to the alpha build.</li>
+      <li><strong>Stable publish</strong> writes all three: <code>latest.yml</code>,
+      <code>beta.yml</code>, and <code>alpha.yml</code>.</li>
+    </ul>
+    <p>Configured in <code>opentrons/app-shell/electron-builder.config.js</code> via
+    <code>generateUpdatesFilesForAllChannels: true</code>. Higher-stability publishes cascade metadata
+    to lower channels so prerelease users are not stranded on older builds when a higher channel moves
+    forward.</p>
     <p>This applies on every Opentrons app host that serves desktop updater YAMLs, including Flex
     internal (<code>ot3-development.builds.opentrons.com</code>), Flex external
     (<code>builds.opentrons.com</code>), OT-2 internal
     (<code>ot2-development.builds.opentrons.com</code>), and OT-2 external
     (<code>ot2.builds.opentrons.com</code>).</p>
+
+    <h2>Publish order vs tag order</h2>
+    <div class="panel">
+      <p>Git <strong>tag push order</strong> and desktop <strong>build publish order</strong> are
+      separate. Tags at the same semver base can be created in any order. Alpha and beta are
+      independent tag lanes; either lane can move forward first.</p>
+      <p>Updater YAML pointers follow <strong>which desktop build finished publishing last</strong>,
+      not which tag was created first. Artifact URLs in <code>releases.json</code> keep every
+      published version; only the channel YAML files (<code>alpha.yml</code>, <code>beta.yml</code>,
+      <code>latest.yml</code>) are overwritten on publish.</p>
+      <p><strong>Real example (internal Flex 4.0.0):</strong>
+      <code>ot3@4.0.0-alpha.4</code> was tagged on 2026-06-17 and
+      <code>ot3@4.0.0-beta.1</code> on 2026-06-22. Both builds remain in
+      <code>releases.json</code>, but <code>alpha.yml</code> currently points at
+      <code>4.0.0-beta.1</code> because the beta desktop publish ran after alpha with no follow-up
+      alpha publish to restore <code>alpha.yml</code>. Alpha-channel users see the beta build until
+      a new alpha desktop publish completes.</p>
+    </div>
 
     <h2>Parallel flavors, not only a straight ladder</h2>
     <div class="panel">
@@ -486,16 +516,28 @@ def render_release_channel_hierarchy_page() -> str:
 
     <h2>When both alpha and beta need fresh builds</h2>
     <p>If you intend to update <strong>both</strong> channels in the same release cycle, publish
-    <strong>beta before alpha</strong>. A beta desktop publish overwrites <code>alpha.yml</code> with
-    the beta build until an alpha publish restores alpha metadata to the intended alpha build.</p>
-    <p>That ordering rule is about <strong>updater YAML only</strong>. It does not mean alpha must
-    always precede beta in development, and it does not replace the traditional confidence ladder.
-    It prevents alpha-channel users from staying on a beta build after you meant to ship a distinct
-    alpha.</p>
+    desktop builds in this order:</p>
+    <ol>
+      <li><strong>Beta first</strong> (overwrites <code>beta.yml</code> and <code>alpha.yml</code>)</li>
+      <li><strong>Alpha second</strong> (restores <code>alpha.yml</code> only; leaves
+      <code>beta.yml</code> on the beta build)</li>
+    </ol>
+    <p>Do <strong>not</strong> stop after step 1. Beta alone leaves alpha-channel users on the beta
+    build. Step 2 is required whenever alpha and beta are distinct builds at the same semver base.</p>
+    <p>That ordering rule is about <strong>desktop build publish order</strong>, not git tag order.
+    Tags can be pushed in either sequence. It also does not mean alpha must always precede beta in
+    development. It ensures <code>alpha.yml</code> ends on the intended alpha build after both
+    channels update.</p>
     {_paired_release_svg()}
 
     <h2>Failure risk</h2>
     <div class="panel">
+      <p><strong>Beta after alpha (without a follow-up alpha publish):</strong> the common failure
+      mode. Beta overwrites <code>alpha.yml</code>; alpha artifacts stay in
+      <code>releases.json</code> but alpha-channel users follow <code>alpha.yml</code> and see the
+      beta build.</p>
+      <p><strong>Alpha after beta:</strong> not a failure mode for beta users. Alpha restores
+      <code>alpha.yml</code> only and does not change <code>beta.yml</code>.</p>
       <p>If a beta publish succeeds but the follow-up alpha publish fails or is skipped,
       <strong>alpha-channel users keep seeing the beta build</strong> until alpha metadata is
       restored. Treat a paired cycle as incomplete until:</p>
@@ -516,8 +558,11 @@ def render_release_channel_hierarchy_page() -> str:
     <ul>
       <li><strong>Traditional model:</strong> alpha (narrow) → beta (broader) → stable, with iteration
       on alpha and beta until confidence is high enough.</li>
-      <li><strong>YAML cascade:</strong> electron-updater keeps lower channels aligned with higher
-      stability publishes so the hierarchy is preserved on the CDN.</li>
+      <li><strong>YAML cascade (one-way):</strong> beta overwrites <code>alpha.yml</code>; alpha
+      restores <code>alpha.yml</code> only and does not touch <code>beta.yml</code>; stable
+      overwrites all three.</li>
+      <li><strong>Tag order ≠ publish order:</strong> tags can be pushed in any sequence; YAML
+      pointers follow the last desktop build publish.</li>
       <li><strong>Parallel flavors:</strong> alpha and beta can represent different active build lines;
       the hierarchy governs updater metadata, not a single mandatory promotion path.</li>
       <li><strong>Paired cycle:</strong> when both channels need new builds, publish beta then alpha so

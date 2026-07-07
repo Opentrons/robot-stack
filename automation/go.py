@@ -1596,9 +1596,12 @@ ASSUMPTIONS_MARKDOWN = Markdown(
     merged into the release branch, not a different lane
   - Flex internal examples: `ot3@X.Y.Z`, `ot3@X.Y.Z-alpha.N`, `ot3@X.Y.Z-beta.N`
   - Flex external examples: `vX.Y.Z`, `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`
-  - When beta and alpha both need updates in one cycle, ship beta before alpha so beta
-    desktop builds do not leave alpha updater YAML pointing at the wrong build; that
-    sequencing rule does **not** mean alpha must always precede beta on the semver base
+  - When beta and alpha both need desktop builds in one cycle, publish builds **beta first, then alpha**:
+    beta overwrites `alpha.yml`; follow-up alpha restores `alpha.yml` only (does not change `beta.yml`)
+  - Tag push order can differ; updater YAML follows the **last desktop build publish**, not tag order
+  - Beta publish without follow-up alpha leaves alpha-channel users on the beta build (artifacts in
+    `releases.json` are unchanged); see release-channel-hierarchy docs for the 4.0.0 internal example
+  - That sequencing rule is for updater YAML only; alpha and beta remain independent tag lanes
 """
 )
 
@@ -1877,7 +1880,10 @@ def print_track_builds_command(release_path: ReleasePath, app_tag: str) -> None:
 
     path = cast(RobotPath, release_path.name)
     track_command = track_builds_invocation(path, app_tag, wait=True)
-    invalidate_command = f"just invalidate-cloudfront --path {path} --tag {app_tag}"
+    invalidate_command = (
+        f"just invalidate-cloudfront --path {path} --tag {app_tag} --execute --wait"
+    )
+    verify_assets_command = f"just verify-release-assets --path {path} --tag {app_tag}"
     validate_command = f"just validate-release-tags --tag {app_tag}"
     console.print()
     console.print(
@@ -1886,7 +1892,8 @@ def print_track_builds_command(release_path: ReleasePath, app_tag: str) -> None:
             f"0. Verify coordinated tags exist locally:\n[bold cyan]{validate_command}[/]\n\n"
             "After pushing the app tag:\n\n"
             f"1. Track app, kickoff, and robot OS CI:\n[bold cyan]{track_command}[/]\n\n"
-            f"2. After builds finish, print CloudFront invalidation command:\n[bold cyan]{invalidate_command}[/]",
+            f"2. After builds finish, invalidate CloudFront and wait for completion:\n[bold cyan]{invalidate_command}[/]\n\n"
+            f"3. Verify live app and robot assets:\n[bold cyan]{verify_assets_command}[/]",
             title="Next steps",
             border_style="blue",
             padding=(1, 2),
@@ -1939,7 +1946,10 @@ def print_release_lane_context_panel(
         f"[bold]On release branch {branch}[/]:\n"
         f"  alpha:  {format_tag_cell(branch_lanes.alpha)}\n"
         f"  beta:   {format_tag_cell(branch_lanes.beta)}\n\n"
-        f"This run targets [bold]{flex_stability}[/]."
+        f"This run targets [bold]{flex_stability}[/].\n\n"
+        f"[dim]Updater YAML: beta publish overwrites alpha.yml; alpha publish restores alpha.yml "
+        f"only. When both channels need builds, publish beta desktop builds before alpha. "
+        f"Tag order can differ from publish order.[/dim]"
     )
     console.print()
     console.print(Panel(body, title="Release flavor lanes", border_style="cyan", padding=(1, 2)))

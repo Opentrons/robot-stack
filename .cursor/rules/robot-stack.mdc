@@ -108,7 +108,7 @@ Tag suggestion rules in `automation/go.py`:
 | VM isolation | `beta` | `ot3@4.0.0-beta.0` | Beta app channel |
 | CRS | `alpha` | `ot3@4.0.0-alpha.4` | Alpha app channel; can ship after beta on the same base |
 
-When **both** beta and alpha channels need fresh builds in the **same cycle**, ship beta before alpha so beta desktop builds do not leave `alpha.yml` pointing at the wrong build. That updater YAML rule does **not** require alpha to precede beta on the semver base.
+When **both** beta and alpha channels need fresh builds in the **same cycle**, publish desktop builds **beta first, then alpha**. Beta overwrites `alpha.yml` (via `generateUpdatesFilesForAllChannels` in `opentrons/app-shell`); a follow-up alpha publish restores `alpha.yml` only and does not change `beta.yml`. Tag push order can differ; YAML pointers follow the last desktop build publish, not tag creation order. If beta publishes without a follow-up alpha, alpha-channel users see the beta build even when alpha artifacts remain in `releases.json` (see internal Flex `4.0.0-alpha.4` / `4.0.0-beta.1`). That sequencing rule is for updater metadata only.
 
 ### OT-2 semver tagging
 
@@ -161,7 +161,7 @@ Tag prefix inference when `--path` is omitted: `internal@` → OT-2, `ot3@` → 
 
 ### CloudFront invalidation (`just invalidate-cloudfront`)
 
-After builds finish, run `just invalidate-cloudfront --path flex|ot2 --tag <app-tag>` to print a copy-paste `aws cloudfront create-invalidation` command (it does not run invalidation). Uses `--profile robotics_robot_stack_prod-admin`. Hosts come from `robot-stack-infra` prod domains:
+After builds finish, run `just invalidate-cloudfront --path flex|ot2 --tag <app-tag>`. By default it prints a copy-paste `aws cloudfront create-invalidation` command. Pass **`--execute --wait`** to run invalidation via the AWS CLI and poll until status is `Completed`. Uses `--profile robotics_robot_stack_prod-admin`. Hosts come from `robot-stack-infra` prod domains:
 
 | Path | Channel | Host | Infra stack |
 |---|---|---|---|
@@ -179,12 +179,13 @@ These scripts are **advisory**. They gather state, print tables, copy blocks, an
 | Action | Who performs it |
 |---|---|
 | `git clone`, `git fetch`, `git pull`, `git tag -l`, `git log` (local repo sync/read) | `just go` only |
-| `git tag -a`, `git push`, workflow dispatch, CloudFront invalidation, S3 uploads | **Not automated**; printed as copy-paste commands |
-| Read GitHub Actions / AWS CloudFront distribution IDs | `track-builds`, `invalidate-cloudfront` (lookup only) |
-| Fetch public S3/CloudFront manifests over HTTPS | asset inventory scripts |
+| `git tag -a`, `git push`, workflow dispatch, S3 uploads | **Not automated**; printed as copy-paste commands |
+| CloudFront invalidation | **Not automated by default**; `--execute --wait` runs invalidation when the operator opts in |
+| Read GitHub Actions / AWS CloudFront distribution IDs | `track-builds`, `invalidate-cloudfront` (lookup; create when `--execute`) |
+| Fetch public S3/CloudFront manifests over HTTPS | asset inventory and `verify-release-assets` scripts |
 | Write local HTML under `.build/` or `pages/` | `ot2-assets`, `flex-assets`, `assets-pages` |
 
-Nothing in this repo creates release tags, pushes tags, triggers CI, invalidates CloudFront, or publishes artifacts unless an operator runs the printed commands elsewhere.
+Nothing in this repo creates release tags, pushes tags, triggers CI, or publishes artifacts unless an operator runs the printed commands elsewhere. CloudFront invalidation runs only when the operator passes `--execute` to `just invalidate-cloudfront`.
 
 ## Agentic CLI reference
 
@@ -198,9 +199,10 @@ Run everything via `uv run just <recipe> ...` or `uv run ./automation/<script>.p
 2. **Human:** run printed tag commands in each repo (stack repos first, app last). Check out the release branch in each repo when `go` prints `git checkout …`
 3. **Validate coordinated tags (Flex):** `just validate-release-tags --tag <app-tag>` before pushing the app tag
 4. **Track CI:** `just track-builds --non-interactive --path flex|ot2 --tag <app-tag> --wait`
-5. **Human:** wait for builds; validate manifests if needed (`just ot2-assets` / `just flex-assets`)
-6. **Print invalidation:** `just invalidate-cloudfront --non-interactive --path flex|ot2 --tag <app-tag>`
-7. **Human:** run the printed `aws cloudfront create-invalidation` command
+5. **Human:** wait for builds to finish
+6. **Invalidate CDN:** `just invalidate-cloudfront --non-interactive --path flex|ot2 --tag <app-tag> --execute --wait` (omit `--execute` to print the AWS command only)
+7. **Verify assets:** `just verify-release-assets --non-interactive --path flex|ot2 --tag <app-tag>`
+8. **Optional:** browse manifests with `just ot2-assets` / `just flex-assets` or regenerate `just assets-pages`
 
 ### `just go` (`automation/go.py`)
 
@@ -229,7 +231,7 @@ just go --non-interactive --skip-assumptions --path flex --release-type internal
 just go --non-interactive --skip-assumptions --path flex --release-type internal --stability alpha --version v4.0.0 --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main
 ```
 
-**Output includes:** latest-tag summary (stable / alpha / beta lanes at the semver base), release flavor lanes panel, change-since-tag tables (same lane on release branch), tag push order, per-repo tag plans (`git checkout` when release branch differs from default, then `git tag -a` / `git push` suggestions), app tag section, and a **Next steps** panel with `track-builds` and `invalidate-cloudfront` commands.
+**Output includes:** latest-tag summary (stable / alpha / beta lanes at the semver base), release flavor lanes panel, change-since-tag tables (same lane on release branch), tag push order, per-repo tag plans (`git checkout` when release branch differs from default, then `git tag -a` / `git push` suggestions), app tag section, and a **Next steps** panel with `track-builds`, `invalidate-cloudfront --execute --wait`, and `verify-release-assets` commands.
 
 ### `just track-builds` (`automation/track_builds.py`)
 
@@ -257,7 +259,7 @@ just track-builds --non-interactive --path ot2 --tag internal@26.5.2601 --wait
 
 ### `just invalidate-cloudfront` (`automation/invalidate_cloudfront.py`)
 
-Prints CloudFront host mapping, distribution ID (when AWS creds allow lookup), paths, and a copy-paste `aws cloudfront create-invalidation` command. **Does not run invalidation.**
+Prints CloudFront host mapping, distribution ID (when AWS creds allow lookup), paths, and a copy-paste `aws cloudfront create-invalidation` command. With **`--execute`**, runs that command via the AWS CLI. With **`--execute --wait`**, polls until the invalidation completes and prints status as it waits.
 
 | Flag | Purpose |
 |---|---|
@@ -266,11 +268,33 @@ Prints CloudFront host mapping, distribution ID (when AWS creds allow lookup), p
 | `--release-type internal\|external` | Prefix bare tags |
 | `--aws-profile` | AWS profile for lookup (default: `robotics_robot_stack_prod-admin`) |
 | `--skip-cloudfront-lookup` | Skip AWS lookup; print placeholder distribution ID |
+| `--execute` | Run `aws cloudfront create-invalidation` instead of printing only |
+| `--wait` | With `--execute`, poll until invalidation completes |
+| `--wait-timeout` | Max wait seconds with `--wait` (default `900`) |
+| `--poll-seconds` | Poll interval with `--wait` (default `15`) |
 | `--non-interactive` | Require `--tag`; no prompts |
 
 ```bash
-just invalidate-cloudfront --non-interactive --path flex --tag ot3@8.5.0-alpha.1
+just invalidate-cloudfront --non-interactive --path flex --tag ot3@8.5.0-alpha.1 --execute --wait
 just invalidate-cloudfront --non-interactive --path ot2 --tag internal@26.5.2601 --skip-cloudfront-lookup
+```
+
+### `just verify-release-assets` (`automation/verify_release_assets.py`)
+
+Fetches live app and robot manifests plus electron-updater YAMLs for the tag's channel and verifies the tag's version is published. Checks updater YAML versions for the tag's stability lane (`latest*` / `beta*` / `alpha*`) and HEAD/GET reachability of artifact URLs from `releases.json`. OT-2 external robot OS version checks are skipped (buildroot uses independent traditional semver). Read-only against public URLs.
+
+| Flag | Purpose |
+|---|---|
+| `--path flex\|ot2` | Robot path (default: infer from tag) |
+| `--tag` | App release tag (required with `--non-interactive`) |
+| `--release-type internal\|external` | Prefix bare tags |
+| `--non-interactive` | Require `--tag`; no prompts |
+
+**Exit codes:** `0` if all checks pass; `1` if any check fails.
+
+```bash
+just verify-release-assets --non-interactive --path flex --tag ot3@8.5.0
+just verify-release-assets --non-interactive --path ot2 --tag internal@26.5.2601
 ```
 
 ### `just validate-release-tags` (`automation/validate_release_tags.py`)
@@ -289,9 +313,9 @@ just validate-release-tags --tag ot3@8.5.0-beta.1
 just validate-release-tags --fetch --tag v10.0.0-alpha.0
 ```
 
-### Asset inventory (`just ot2-assets`, `just flex-assets`, `just assets-pages`)
+### Asset inventory (`just ot2-assets`, `just flex-assets`, `just assets-pages`, `just verify-release-assets`)
 
-Fetch live S3/CloudFront manifests and write HTML reports. Read-only against public URLs except local file writes.
+Fetch live S3/CloudFront manifests and write HTML reports, or verify one release tag's published assets. Read-only against public URLs except local file writes under `.build/` or `pages/`.
 
 | Recipe | Script | Default output |
 |---|---|---|
@@ -299,6 +323,7 @@ Fetch live S3/CloudFront manifests and write HTML reports. Read-only against pub
 | `just flex-assets` | `automation/flex_assets.py` | `.build/flex-assets.html` |
 | `just assets-pages` | `automation/publish_assets_pages.py` | `pages/` (index + per-channel asset inventories + release guides) |
 | `just assets-serve` | same with `--serve --open-browser` | serves `pages/` on port `8765` |
+| `just verify-release-assets` | `automation/verify_release_assets.py` | Rich table to stdout; exit `1` on failure |
 
 Shared flags (per-platform scripts): `--limit`, `--output`, `--serve`, `--port`, `--open-browser`.
 

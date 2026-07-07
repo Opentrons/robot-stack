@@ -34,5 +34,8 @@ def test_release_channel_hierarchy_page_covers_updater_model() -> None:
     assert "latest.yml" in html
     assert "Flex" in html and "OT-2" in html
     assert "beta before alpha" in html.lower()
+    assert "publish order vs tag order" in html.lower()
+    assert "does not" in html.lower() and "beta.yml" in html
+    assert "4.0.0-alpha.4" in html
     assert "validate-release-tags" not in html
     assert "ot3@" not in html

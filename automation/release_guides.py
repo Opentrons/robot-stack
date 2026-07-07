@@ -31,11 +31,12 @@ def _tooling_model_section() -> str:
     """Explain advisory robot-stack scripts (matches README and workspace rules)."""
     return """
     <h2>Robot-stack tooling</h2>
-    <p><code>just go</code>, <code>just track-builds</code>, and <code>just invalidate-cloudfront</code>
-    are <strong>advisory</strong>: they sync local clones under this workspace, print tables and analysis,
-    and emit copy-paste commands. A human (or agent) runs <code>git tag -a</code>, <code>git push</code>,
-    and <code>aws cloudfront create-invalidation</code> elsewhere. Nothing here pushes tags, triggers CI,
-    or invalidates CloudFront by itself.</p>
+    <p><code>just go</code>, <code>just track-builds</code>, <code>just invalidate-cloudfront</code>,
+    and <code>just verify-release-assets</code> are <strong>advisory</strong>: they sync local clones under
+    this workspace, print tables and analysis, and emit copy-paste commands. A human (or agent) runs
+    <code>git tag -a</code> and <code>git push</code> elsewhere. CloudFront invalidation runs only when
+    the operator passes <code>--execute</code> to <code>just invalidate-cloudfront</code>. Nothing here
+    pushes tags or triggers CI by itself.</p>
     <p><code>robot-stack-infra</code> is always cloned for reference; it is not included in release
     tagging tables.</p>
     <p>Plan a release non-interactively, for example:</p>
@@ -315,9 +316,9 @@ def _invalidate_cloudfront_section(robot: str, example_tag: str) -> str:
     robot_prefix = "ot2-br" if robot == "ot2" else "ot3-oe"
     return f"""
     <h2>CloudFront invalidation</h2>
-    <p>CI does <strong>not</strong> invalidate CloudFront automatically. After builds finish, print a
-    copy-paste command (it does not run invalidation):</p>
-    <pre>just invalidate-cloudfront --non-interactive --path {path_flag} --tag {tag}</pre>
+    <p>CI does <strong>not</strong> invalidate CloudFront automatically. After builds finish, run
+    invalidation and wait for completion (omit <code>--execute</code> to print the AWS command only):</p>
+    <pre>just invalidate-cloudfront --non-interactive --path {path_flag} --tag {tag} --execute --wait</pre>
     <p>Invalidates <code>/app/*</code> and <code>/{robot_prefix}/*</code> on the channel host.
     Uses AWS profile <code>robotics_robot_stack_prod-admin</code> when credentials allow distribution
     lookup; otherwise the script prints a lookup command and placeholder ID.</p>
@@ -325,15 +326,19 @@ def _invalidate_cloudfront_section(robot: str, example_tag: str) -> str:
 
 
 def _validate_assets_section(path: str) -> str:
-    """Point to live asset inventory pages."""
+    """Point to tag verification and live asset inventory pages."""
     if path == "flex":
         external_page = "flex-external-assets.html"
         internal_page = "flex-internal-assets.html"
+        example_tag = "ot3@8.5.0"
     else:
         external_page = "ot2-external-assets.html"
         internal_page = "ot2-internal-assets.html"
+        example_tag = "internal@26.5.2601"
     return f"""
     <h2>Validate published artifacts</h2>
+    <p>Verify manifests, updater YAMLs, and artifact URLs for the release tag:</p>
+    <pre>just verify-release-assets --non-interactive --path {html.escape(path)} --tag {html.escape(example_tag)}</pre>
     <p>Optionally regenerate live manifest inventories:</p>
     <pre>just assets-pages</pre>
     <p>Or per-platform reports: <code>just flex-assets</code> / <code>just ot2-assets</code>.
@@ -448,6 +453,10 @@ git push origin v70 ex9.1.0-alpha.7</code></pre>
       increments its own <code>.N</code> from the app repo tag catalog. Compare ranges use the
       prior tag in the same lane merged into the release branch. Stable external releases drop the
       prerelease segment entirely.</p>
+      <p><strong>Desktop updater YAML (publish order, not tag order):</strong> beta builds overwrite
+      <code>beta.yml</code> and <code>alpha.yml</code>; alpha builds update <code>alpha.yml</code>
+      only and do not change <code>beta.yml</code>. When both channels need fresh builds in one
+      cycle, publish beta desktop builds first, then alpha to restore <code>alpha.yml</code>.</p>
       <p><code>oe-core</code> uses the same stack tag as the app.
       <code>ot3-firmware</code> uses <code>ex*</code> mapped from the stack tag (for example
       <code>v9.1.0-beta.0</code> → <code>ex9.1.0-beta.0</code>) plus integer <code>vN</code>.
@@ -551,10 +560,18 @@ git push origin v70 ot3@4.0.0-beta.0</code></pre>
           <tr><td>Stable</td><td>stable</td><td><code>ot3@4.0.0</code></td><td>Same prompted base version</td></tr>
         </tbody>
       </table>
-      <p>When both channels need updates in the <strong>same release cycle</strong>, ship
-      <strong>beta before alpha</strong> so beta desktop builds do not leave alpha updater YAML
-      pointing at the wrong build. That rule is for updater metadata only; alpha and beta remain
-      independent tag lanes at the same semver base. See
+      <p>When both channels need updates in the <strong>same release cycle</strong>, publish desktop
+      builds <strong>beta first, then alpha</strong>:</p>
+      <ol>
+        <li>Beta publish overwrites <code>beta.yml</code> and <code>alpha.yml</code> (alpha users
+        temporarily see the beta build).</li>
+        <li>Alpha publish restores <code>alpha.yml</code> only; <code>beta.yml</code> stays on beta.</li>
+      </ol>
+      <p>Git tag order can differ. YAML pointers follow the <strong>last desktop build
+      publish</strong>. Beta without follow-up alpha leaves alpha-channel users on beta even when
+      alpha artifacts remain in <code>releases.json</code> (for example
+      <code>ot3@4.0.0-alpha.4</code> tagged before <code>ot3@4.0.0-beta.1</code>, but
+      <code>alpha.yml</code> points at beta.1). See
       <a href="release-channel-hierarchy.html">release channel hierarchy</a> and
       <a href="flex-coordinated-tags.html">coordinated tagging reference</a>.</p>
       <p>Before pushing the app tag, run

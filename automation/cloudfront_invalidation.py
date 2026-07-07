@@ -13,11 +13,13 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import Literal, Optional
 
 from rich.console import Console
 from rich.prompt import Prompt
+from rich.status import Status
 
 from automation.flex_urls import FLEX_EXTERNAL, FLEX_INTERNAL, FLEX_ROBOT_PREFIX
 from automation.ot2_urls import OT2_EXTERNAL, OT2_INTERNAL, OT2_ROBOT_PREFIX
@@ -52,6 +54,16 @@ class CloudFrontInvalidationPlan:
     distribution_url: str
     paths: tuple[str, ...]
     profile: str
+
+
+@dataclass(frozen=True)
+class CloudFrontInvalidationRun:
+    """One submitted CloudFront invalidation request."""
+
+    invalidation_id: str
+    distribution_id: str
+    status: str
+    create_time: Optional[str] = None
 
 
 def release_channel_from_tag(tag: str) -> ReleaseChannel:
@@ -164,7 +176,173 @@ def build_invalidation_plan(
 def format_create_invalidation_command(plan: CloudFrontInvalidationPlan, distribution_id: str) -> str:
     """Return a copy-paste aws cloudfront create-invalidation command."""
     path_args = " ".join(f'"{path}"' for path in plan.paths)
-    return f"aws cloudfront create-invalidation --profile {plan.profile} --distribution-id {distribution_id} --paths {path_args}"
+    return (
+        f"aws cloudfront create-invalidation --profile {plan.profile} "
+        f"--distribution-id {distribution_id} --paths {path_args} --output json"
+    )
+
+
+def run_aws_json(args: list[str], *, profile: str) -> dict[str, object]:
+    """Run an AWS CLI command and parse JSON stdout."""
+    result = subprocess.run(
+        ["aws", *args, "--profile", profile, "--output", "json"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip() or "aws command failed"
+        raise RuntimeError(stderr)
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"AWS CLI returned invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("AWS CLI returned unexpected JSON payload")
+    return payload
+
+
+def parse_invalidation_payload(payload: dict[str, object], distribution_id: str) -> CloudFrontInvalidationRun:
+    """Parse create-invalidation or get-invalidation JSON into a run record."""
+    invalidation = payload.get("Invalidation")
+    if not isinstance(invalidation, dict):
+        raise RuntimeError("AWS invalidation response missing Invalidation object")
+    invalidation_id = invalidation.get("Id")
+    status = invalidation.get("Status")
+    if not isinstance(invalidation_id, str) or not isinstance(status, str):
+        raise RuntimeError("AWS invalidation response missing Id or Status")
+    create_time = invalidation.get("CreateTime")
+    return CloudFrontInvalidationRun(
+        invalidation_id=invalidation_id,
+        distribution_id=distribution_id,
+        status=status,
+        create_time=create_time if isinstance(create_time, str) else None,
+    )
+
+
+def create_cloudfront_invalidation(plan: CloudFrontInvalidationPlan, distribution_id: str) -> CloudFrontInvalidationRun:
+    """Submit a CloudFront invalidation for the resolved release paths."""
+    payload = run_aws_json(
+        [
+            "cloudfront",
+            "create-invalidation",
+            "--distribution-id",
+            distribution_id,
+            "--paths",
+            *plan.paths,
+        ],
+        profile=plan.profile,
+    )
+    return parse_invalidation_payload(payload, distribution_id)
+
+
+def get_cloudfront_invalidation(
+    distribution_id: str,
+    invalidation_id: str,
+    *,
+    profile: str,
+) -> CloudFrontInvalidationRun:
+    """Fetch the current status of one CloudFront invalidation."""
+    payload = run_aws_json(
+        [
+            "cloudfront",
+            "get-invalidation",
+            "--distribution-id",
+            distribution_id,
+            "--id",
+            invalidation_id,
+        ],
+        profile=profile,
+    )
+    return parse_invalidation_payload(payload, distribution_id)
+
+
+def wait_for_cloudfront_invalidation(
+    run: CloudFrontInvalidationRun,
+    *,
+    profile: str,
+    timeout_seconds: int = 900,
+    poll_seconds: int = 15,
+    output: Console | None = None,
+) -> CloudFrontInvalidationRun:
+    """Poll CloudFront until an invalidation completes or times out."""
+    out = output or console
+    deadline = time.time() + timeout_seconds
+    started = time.time()
+    current = run
+    with Status("", console=out) as status:
+        while True:
+            elapsed = int(time.time() - started)
+            status.update(
+                f"[cyan]CloudFront invalidation[/] id={current.invalidation_id} status={current.status} ({elapsed}s elapsed)"
+            )
+            if current.status == "Completed":
+                out.print(
+                    f"[green]Invalidation completed[/] (id={current.invalidation_id}, distribution={current.distribution_id})"
+                )
+                return current
+            if time.time() >= deadline:
+                raise TimeoutError(
+                    f"CloudFront invalidation {current.invalidation_id} still {current.status} after {timeout_seconds}s"
+                )
+            time.sleep(poll_seconds)
+            current = get_cloudfront_invalidation(
+                current.distribution_id,
+                current.invalidation_id,
+                profile=profile,
+            )
+
+
+def require_distribution_id(plan: CloudFrontInvalidationPlan) -> str:
+    """Return a resolved distribution ID or raise when lookup failed."""
+    if plan.distribution_id is None:
+        raise ValueError(
+            f"Could not resolve CloudFront distribution ID for {plan.target.host}. "
+            "Re-run without --skip-cloudfront-lookup or pass a known distribution ID."
+        )
+    return plan.distribution_id
+
+
+def execute_cloudfront_invalidation(
+    path: RobotPath,
+    tag: str,
+    *,
+    profile: str = ROBOT_STACK_PROD_PROFILE,
+    lookup_distribution_id: bool = True,
+    wait: bool = False,
+    wait_timeout: int = 900,
+    poll_seconds: int = 15,
+    output: Console | None = None,
+) -> CloudFrontInvalidationRun:
+    """Create a CloudFront invalidation and optionally wait for completion."""
+    out = output or console
+    plan = build_invalidation_plan(
+        path,
+        tag,
+        profile=profile,
+        lookup_distribution_id=lookup_distribution_id,
+    )
+    distribution_id = require_distribution_id(plan)
+    command = format_create_invalidation_command(plan, distribution_id)
+    out.print()
+    out.print("[bold green]CloudFront invalidation[/]")
+    out.print(format_cloudfront_invalidation_report(plan), soft_wrap=False)
+    out.print()
+    out.print("[bold]Running:[/]")
+    print_copy_paste_command(command)
+    run = create_cloudfront_invalidation(plan, distribution_id)
+    out.print(
+        f"[yellow]Submitted[/] invalidation {run.invalidation_id} (status={run.status}, distribution={run.distribution_id})"
+    )
+    if wait:
+        return wait_for_cloudfront_invalidation(
+            run,
+            profile=profile,
+            timeout_seconds=wait_timeout,
+            poll_seconds=poll_seconds,
+            output=out,
+        )
+    return run
 
 
 def print_copy_paste_command(command: str) -> None:

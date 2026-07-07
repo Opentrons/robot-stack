@@ -59,7 +59,8 @@ FLEX_CONFIG = ReleasePlatformConfig(
         "See the channel section below for robot vs app manifest authority. "
         "Flex robots read <code>ot3-oe/releases.json</code> for on-robot updates. "
         "CloudFront for <code>builds.opentrons.com</code> is not invalidated by CI; run "
-        "<code>just invalidate-cloudfront</code> manually after external app builds finish."
+        "<code>just invalidate-cloudfront --execute --wait</code> manually after external app builds finish. "
+        "Then run <code>just verify-release-assets</code> to confirm the tag's manifests and artifacts."
     ),
     show_robot_manifest_key=True,
 )

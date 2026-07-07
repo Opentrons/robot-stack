@@ -1,6 +1,6 @@
 # robot-stack
 
-Python tooling to plan Opentrons robot releases across the multi-repo stack (Flex and OT-2): which repos need tags, what each tag should look like, where CI runs after you push, and which CloudFront invalidation to run when builds finish.
+Python tooling to plan Opentrons robot releases across the multi-repo stack (Flex and OT-2): which repos need tags, what each tag should look like, where CI runs after you push, how to invalidate CloudFront when builds finish, and how to verify published assets for a tag.
 
 ## Recommended workflow (Cursor)
 
@@ -8,7 +8,7 @@ Open this repo in [Cursor](https://cursor.com) and start a chat along these line
 
 > I need to do a new release for **Flex** (or **OT-2**). It will be **internal** or **external**, and **stable**, **alpha**, or **beta**.
 
-Workspace rules in `.cursor/rules/` teach the agent how to run the scripts below. It will sync local clones, print release analysis, and suggest copy-paste `git tag` / `git push` commands. **Nothing is pushed or invalidated automatically**; review the output, confirm you agree, then run the printed steps yourself.
+Workspace rules in `.cursor/rules/` teach the agent how to run the scripts below. It will sync local clones, print release analysis, and suggest copy-paste `git tag` / `git push` commands. **Nothing is pushed automatically**; CloudFront invalidation runs only when you pass `--execute` to `just invalidate-cloudfront`.
 
 Prompt Cursor as above and it will walk you through the full release in order, running the advisory scripts and printing what to do next at each stage:
 
@@ -16,8 +16,9 @@ Prompt Cursor as above and it will walk you through the full release in order, r
 2. **Push tags** — prints `git tag` / `git push` commands for you to run (stack repos first, app last).
 3. **Validate coordinated tags (Flex)** — runs `just validate-release-tags` to confirm stack tags on `opentrons`/`oe-core`, the mapped `ex*`/`ot3@` coordination tag plus integer `vN` on `ot3-firmware`, before you push the app tag.
 4. **Track builds** — runs `just track-builds` after the app tag is pushed to surface app, kickoff, and robot OS workflow runs.
-5. **Verify builds** — reminds you to wait for CI and spot-check manifests if needed.
-6. **Invalidate CDN** — runs `just invalidate-cloudfront` to print the exact `aws cloudfront create-invalidation` command (distribution and paths) for your tag and channel.
+5. **Verify builds** — wait for CI to finish.
+6. **Invalidate CDN** — runs `just invalidate-cloudfront --execute --wait` to submit CloudFront invalidation and poll until it completes (omit `--execute` to print the AWS command only).
+7. **Verify assets** — runs `just verify-release-assets` to check manifests, updater YAMLs, and artifact URLs for the tag.
 
 ### TODO: release checklists
 
@@ -50,8 +51,10 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
   - `uv run just validate-release-tags --tag ot3@4.0.0-beta.0`
 - find GitHub Actions runs after pushing an app tag
   - `uv run just track-builds --path ot2 --tag internal@26.5.2801 --wait`
-- print a CloudFront invalidation command after builds finish
-  - `uv run just invalidate-cloudfront --path ot2 --tag internal@26.5.2801`
+- invalidate CloudFront after builds finish (or print the AWS command only without `--execute`)
+  - `uv run just invalidate-cloudfront --path ot2 --tag internal@26.5.2601 --execute --wait`
+- verify live manifests and artifacts for a release tag
+  - `uv run just verify-release-assets --path ot2 --tag internal@26.5.2601`
 
 ## Release Paths
 
@@ -123,7 +126,12 @@ git push origin v9.1.0-alpha.7
 | VM isolation | `beta` | `ot3@4.0.0-beta.0` | Beta app channel |
 | CRS | `alpha` | `ot3@4.0.0-alpha.4` | Alpha app channel; can follow beta on the same base |
 
-When **both** beta and alpha channels need fresh builds in the **same cycle**, ship beta before alpha: beta desktop builds overwrite alpha updater YAML metadata (`generateUpdatesFilesForAllChannels`). That sequencing rule is for updater metadata only.
+When **both** beta and alpha channels need fresh builds in the **same cycle**, publish desktop builds **beta first, then alpha**:
+
+1. **Beta publish** overwrites `beta.yml` and `alpha.yml` (alpha-channel users temporarily see the beta build).
+2. **Alpha publish** restores `alpha.yml` only; `beta.yml` stays on the beta build.
+
+Tag push order can differ from publish order. YAML pointers follow the **last desktop build publish**, not which tag was created first. If beta publishes without a follow-up alpha, alpha-channel users keep seeing the beta build even when alpha artifacts remain in `releases.json` (for example internal Flex `4.0.0-alpha.4` tagged before `4.0.0-beta.1`, but `alpha.yml` now points at beta.1). Configured in `opentrons/app-shell/electron-builder.config.js` via `generateUpdatesFilesForAllChannels: true`. See [release channel hierarchy](https://opentrons.github.io/robot-stack/release-channel-hierarchy.html).
 
 Before pushing the app tag, run `just validate-release-tags --tag <app-tag>`. `go` prints this in the Next steps panel.
 
@@ -144,7 +152,19 @@ just track-builds --path ot2 --tag internal@26.5.2801 --wait
 
 The script finds app, kickoff, and robot OS workflow runs and prints a Rich table plus a Slack copy block with two links (`app` and `ot2` or `flex`). With `--wait`, it polls every 15 seconds until all three workflow runs appear (default timeout 15 minutes).
 
-After builds finish, print a CloudFront invalidation command with `just invalidate-cloudfront --path ot2 --tag internal@26.5.2801`.
+After builds finish, invalidate CloudFront and wait for completion:
+
+```bash
+just invalidate-cloudfront --path ot2 --tag internal@26.5.2601 --execute --wait
+```
+
+Then verify the tag's manifests, updater YAMLs, and artifact URLs:
+
+```bash
+just verify-release-assets --path ot2 --tag internal@26.5.2601
+```
+
+Omit `--execute` on `invalidate-cloudfront` to print the `aws cloudfront create-invalidation` command without running it. For broader manifest browsing, use `just ot2-assets` / `just flex-assets` or `just assets-pages`.
 
 ## OT-2 calendar semver
 

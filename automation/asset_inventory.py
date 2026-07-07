@@ -563,6 +563,10 @@ def render_manifest_authority_note() -> str:
         directly. App <code>releases.json</code> is not the app updater source of truth: a CloudFront edge
         function parses the latest stable semver from production and routes <code>latest*</code> requests to
         matching stable build artifacts. The tables below are still useful for humans and release validation.
+        <strong>Updater YAML overwrite:</strong> beta desktop publishes overwrite <code>alpha.yml</code> as
+        well as <code>beta.yml</code>; alpha publishes update <code>alpha.yml</code> only. Tag push order can
+        differ from publish order. When both channels need builds, publish beta before alpha so
+        <code>alpha.yml</code> ends on the alpha build.
       </p>
     """
 

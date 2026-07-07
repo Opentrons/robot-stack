@@ -14,9 +14,13 @@
 @track-builds *args:
     uv run ./automation/track_builds.py {{ args }}
 
-# print CloudFront invalidation command for a release tag
+# print or run CloudFront invalidation for a release tag
 @invalidate-cloudfront *args:
     uv run ./automation/invalidate_cloudfront.py {{ args }}
+
+# verify live app and robot assets for a release tag
+@verify-release-assets *args:
+    uv run ./automation/verify_release_assets.py {{ args }}
 
 # format and lint with ruff
 @fix:
