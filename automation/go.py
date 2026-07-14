@@ -1514,6 +1514,21 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="REPO=BRANCH",
         help="Branch to tag for a stack repo (repeatable). Example: oe-core=main",
     )
+    parser.add_argument(
+        "--write-plan",
+        action="store_true",
+        help="Write a reviewable YAML release plan named after the app tag under .build/plans/.",
+    )
+    parser.add_argument(
+        "--plan-dir",
+        type=Path,
+        help="Directory for --write-plan output (default: .build/plans).",
+    )
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="With --write-plan, skip Rich release tables and only write the plan file.",
+    )
     return parser
 
 
@@ -1880,9 +1895,7 @@ def print_track_builds_command(release_path: ReleasePath, app_tag: str) -> None:
 
     path = cast(RobotPath, release_path.name)
     track_command = track_builds_invocation(path, app_tag, wait=True)
-    invalidate_command = (
-        f"just invalidate-cloudfront --path {path} --tag {app_tag} --execute --wait"
-    )
+    invalidate_command = f"just invalidate-cloudfront --path {path} --tag {app_tag} --execute --wait"
     verify_assets_command = f"just verify-release-assets --path {path} --tag {app_tag}"
     validate_command = f"just validate-release-tags --tag {app_tag}"
     console.print()
@@ -1992,15 +2005,13 @@ def resolve_ot2_external_version_from_state(
     )
 
 
-def run_release(
+def sync_release_repos(
     release_path: ReleasePath,
-    release_type: str,
-    stability: str,
     version: str,
+    release_type: str,
     branch_config: Optional[ReleaseBranchConfig] = None,
-) -> None:
-    """Sync repos and print release tables, tag guidance, and follow-up commands."""
-    active_repos = repos_for_path(release_path)
+) -> Dict[str, RepoState]:
+    """Clone or pull stack repos and return synced tag state."""
     sync_repos = repos_to_sync(release_path)
 
     results: Dict[str, RepoState] = {}
@@ -2014,6 +2025,24 @@ def run_release(
             except Exception as err:
                 console.log(f"[red]❌ {repo.name} failed: {err}[/]")
 
+    return results
+
+
+def run_release(
+    release_path: ReleasePath,
+    release_type: str,
+    stability: str,
+    version: str,
+    branch_config: Optional[ReleaseBranchConfig] = None,
+    *,
+    write_plan: bool = False,
+    plan_dir: Optional[Path] = None,
+    plan_only: bool = False,
+) -> Optional[Path]:
+    """Sync repos and print release tables, tag guidance, and follow-up commands."""
+    active_repos = repos_for_path(release_path)
+    results = sync_release_repos(release_path, version, release_type, branch_config)
+
     if release_path.name == "ot2" and release_type == "external":
         try:
             version = resolve_ot2_external_version_from_state(
@@ -2026,6 +2055,41 @@ def run_release(
         except ValueError as err:
             console.print(f"[red]{err}[/]")
             sys.exit(1)
+
+    plan_path: Optional[Path] = None
+    if write_plan:
+        from automation.release_plan import (
+            build_release_plan,
+            default_plan_path,
+            print_agent_plan_instructions,
+            print_plan_summary,
+            with_plan_integrity,
+            write_release_plan,
+        )
+
+        try:
+            plan = build_release_plan(
+                release_path=release_path,
+                release_type=release_type,
+                stability=stability,
+                version=version,
+                results=results,
+                branch_config=branch_config,
+            )
+        except ValueError as err:
+            console.print(f"[red]Could not build release plan: {err}[/]")
+            sys.exit(1)
+
+        output_path = plan_dir / f"{plan.app_tag}.plan.yaml" if plan_dir is not None else default_plan_path(plan.app_tag)
+        plan_path = write_release_plan(plan, output_path)
+        annotated_plan = with_plan_integrity(plan)
+        if plan_only:
+            print_agent_plan_instructions(annotated_plan, plan_path)
+            return plan_path
+        print_plan_summary(annotated_plan, plan_path)
+
+    if plan_only:
+        return plan_path
 
     branch_summary = ""
     if branch_config is not None and (branch_config.app_branch or branch_config.stack_branches):
@@ -2147,6 +2211,8 @@ def run_release(
     if app_tag is not None:
         print_track_builds_command(release_path, app_tag)
 
+    return plan_path
+
 
 def resolve_branch_config(args: argparse.Namespace) -> ReleaseBranchConfig:
     """Resolve branch overrides from CLI flags."""
@@ -2175,7 +2241,16 @@ def main() -> None:
     version = resolve_release_version(release_path, release_type, args)
     branch_config = resolve_branch_config(args)
 
-    run_release(release_path, release_type, stability, version, branch_config)
+    run_release(
+        release_path,
+        release_type,
+        stability,
+        version,
+        branch_config,
+        write_plan=args.write_plan,
+        plan_dir=args.plan_dir,
+        plan_only=args.plan_only,
+    )
 
 
 if __name__ == "__main__":

@@ -31,16 +31,20 @@ def _tooling_model_section() -> str:
     """Explain advisory robot-stack scripts (matches README and workspace rules)."""
     return """
     <h2>Robot-stack tooling</h2>
-    <p><code>just go</code>, <code>just track-builds</code>, <code>just invalidate-cloudfront</code>,
-    and <code>just verify-release-assets</code> are <strong>advisory</strong>: they sync local clones under
-    this workspace, print tables and analysis, and emit copy-paste commands. A human (or agent) runs
-    <code>git tag -a</code> and <code>git push</code> elsewhere. CloudFront invalidation runs only when
-    the operator passes <code>--execute</code> to <code>just invalidate-cloudfront</code>. Nothing here
-    pushes tags or triggers CI by itself.</p>
+    <p><code>just go-plan</code>, <code>just apply-release-plan</code>, <code>just track-builds</code>,
+    <code>just invalidate-cloudfront</code>, and <code>just verify-release-assets</code> support releases.
+    <code>just go-plan</code> syncs local clones and writes a reviewable YAML plan under
+    <code>.build/plans/&lt;app-tag&gt;.plan.yaml</code>. After review, <code>just apply-release-plan</code>
+    can create and push tags in push order (with resume after partial apply). CloudFront invalidation runs
+    only when the operator passes <code>--execute</code> to <code>just invalidate-cloudfront</code>.
+    <code>just go</code> remains available for interactive tables and copy-paste tag commands.</p>
     <p><code>robot-stack-infra</code> is always cloned for reference; it is not included in release
     tagging tables.</p>
-    <p>Plan a release non-interactively, for example:</p>
-    <pre>just go --non-interactive --skip-assumptions --path flex --release-type external --stability stable</pre>
+    <p>Plan a release non-interactively (agent default):</p>
+    <pre>just go-plan --path flex --release-type internal --stability beta --version v4.0.0</pre>
+    <p>Apply after review:</p>
+    <pre>just apply-release-plan --plan .build/plans/ot3@4.0.0-beta.0.plan.yaml --dry-run
+just apply-release-plan --plan .build/plans/ot3@4.0.0-beta.0.plan.yaml --yes</pre>
     """
 
 

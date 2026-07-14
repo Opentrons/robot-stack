@@ -10,6 +10,10 @@
 @go *args:
     uv run ./automation/go.py {{ args }}
 
+# agent release planning: sync repos and write .build/plans/<app-tag>.plan.yaml
+@go-plan *args:
+    uv run ./automation/go.py --non-interactive --skip-assumptions --write-plan --plan-only {{ args }}
+
 # find GitHub Actions build jobs for a pushed OT-2 or Flex release tag
 @track-builds *args:
     uv run ./automation/track_builds.py {{ args }}
@@ -21,6 +25,10 @@
 # verify live app and robot assets for a release tag
 @verify-release-assets *args:
     uv run ./automation/verify_release_assets.py {{ args }}
+
+# apply a reviewed release plan
+@apply-release-plan *args:
+    uv run ./automation/apply_release_plan.py {{ args }}
 
 # format and lint with ruff
 @fix:

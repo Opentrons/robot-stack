@@ -99,7 +99,7 @@ Tag suggestion rules in `automation/go.py`:
 - **App (`opentrons` / `opentrons-ot2`):** base `X.Y.Z` (Flex) or calendar version (OT-2) from the prompted release version. Flex stable: `ot3@X.Y.Z` / `vX.Y.Z` if missing, else patch bump. Flex alpha/beta: **independent lane counters** at the same base (for example `ot3@4.0.0-alpha.3` and `ot3@4.0.0-beta.0` can coexist). Next tag numbers are read from the **app monorepo tag catalog** (`opentrons` for Flex, `opentrons-ot2` for OT-2). Change logs compare against the prior tag in the **same stability lane** merged into the release branch.
 - **Robot OS (`oe-core`):** same stack tag as the app. Retag unchanged commits when the repo did not change.
 - **Firmware (`ot3-firmware`):** coordination tag is `ot3@*` (internal) or `ex*` mapped from stack `v*` (external). Integer `vN` is globally unique in the firmware repo; suggest a new `vN` only when the release commit does not already have one. Retag-only releases need only the coordination tag.
-- **Before pushing the app tag:** run `just validate-release-tags --tag <app-tag>`. `oe-core` `build-refs` maps external stack tags to `ex*` on firmware ([PR #329](https://github.com/Opentrons/oe-core/pull/329)); missing tags fail (no `:latest:` fallback).
+- **Before pushing the app tag:** run `just validate-release-tags --tag <app-tag>` after the app tag exists locally (or use `just apply-release-plan`, which validates after `create_tag` and before `push`). `oe-core` `build-refs` maps external stack tags to `ex*` on firmware ([PR #329](https://github.com/Opentrons/oe-core/pull/329)); missing tags fail (no `:latest:` fallback).
 
 **Flex release flavors** (same `X.Y.Z` base, independent lanes; not a strict promote-alpha-to-beta ladder):
 
@@ -174,18 +174,21 @@ Invalidation paths are `/app/*` plus `/ot3-oe/*` (Flex) or `/ot2-br/*` (OT-2). W
 
 ## Tooling safety model
 
-These scripts are **advisory**. They gather state, print tables, copy blocks, and suggested shell commands. A human (or agent) runs the printed commands manually.
+These scripts are **advisory** by default. They gather state, print tables, write plan files, and suggest follow-up commands. A human (or agent) reviews the plan and opts into tag apply or CloudFront invalidation.
 
 | Action | Who performs it |
 |---|---|
-| `git clone`, `git fetch`, `git pull`, `git tag -l`, `git log` (local repo sync/read) | `just go` only |
-| `git tag -a`, `git push`, workflow dispatch, S3 uploads | **Not automated**; printed as copy-paste commands |
+| `git clone`, `git fetch`, `git pull`, `git tag -l`, `git log` (local repo sync/read) | `just go` / `just go-plan` |
+| `git tag -a`, `git push` (manual) | Operator, or `just apply-release-plan --yes` after plan review |
+| Workflow dispatch, S3 uploads | Operator |
 | CloudFront invalidation | **Not automated by default**; `--execute --wait` runs invalidation when the operator opts in |
 | Read GitHub Actions / AWS CloudFront distribution IDs | `track-builds`, `invalidate-cloudfront` (lookup; create when `--execute`) |
 | Fetch public S3/CloudFront manifests over HTTPS | asset inventory and `verify-release-assets` scripts |
 | Write local HTML under `.build/` or `pages/` | `ot2-assets`, `flex-assets`, `assets-pages` |
+| Write release plan YAML under `.build/plans/` | `just go-plan` (preferred) or `just go --write-plan` |
+| Apply reviewed release plan (git tag/push) | `just apply-release-plan --yes` (operator opts in) |
 
-Nothing in this repo creates release tags, pushes tags, triggers CI, or publishes artifacts unless an operator runs the printed commands elsewhere. CloudFront invalidation runs only when the operator passes `--execute` to `just invalidate-cloudfront`.
+Nothing in this repo creates release tags, pushes tags, triggers CI, or publishes artifacts unless an operator runs `just apply-release-plan --yes` or manual git commands. CloudFront invalidation runs only when the operator passes `--execute` to `just invalidate-cloudfront`.
 
 ## Agentic CLI reference
 
@@ -195,14 +198,26 @@ Run everything via `uv run just <recipe> ...` or `uv run ./automation/<script>.p
 
 ### Typical release sequence
 
-1. **Plan tags:** `just go --non-interactive --skip-assumptions --path flex|ot2 --release-type internal|external --stability ... [--version ...]`
-2. **Human:** run printed tag commands in each repo (stack repos first, app last). Check out the release branch in each repo when `go` prints `git checkout …`
-3. **Validate coordinated tags (Flex):** `just validate-release-tags --tag <app-tag>` before pushing the app tag
-4. **Track CI:** `just track-builds --non-interactive --path flex|ot2 --tag <app-tag> --wait`
-5. **Human:** wait for builds to finish
-6. **Invalidate CDN:** `just invalidate-cloudfront --non-interactive --path flex|ot2 --tag <app-tag> --execute --wait` (omit `--execute` to print the AWS command only)
-7. **Verify assets:** `just verify-release-assets --non-interactive --path flex|ot2 --tag <app-tag>`
-8. **Optional:** browse manifests with `just ot2-assets` / `just flex-assets` or regenerate `just assets-pages`
+1. **Plan tags:** `just go-plan --path flex|ot2 --release-type internal|external --stability ... [--version ...] [--app-branch ...] [--stack-branch REPO=BRANCH ...]`
+2. **Human:** review `.build/plans/<app-tag>.plan.yaml` (includes a `head_commit_checksum` for staleness detection)
+3. **Apply tags:** `just apply-release-plan --plan .build/plans/<app-tag>.plan.yaml --dry-run`, then `--yes` after review. Apply resumes after partial tag pushes; refuses when a pending repo drifted or a tag conflicts.
+4. **Validate coordinated tags (Flex):** `just validate-release-tags` runs automatically during apply after the app tag is created locally and before it is pushed; can also be run standalone when tagging manually
+5. **Track CI:** `just track-builds --non-interactive --path flex|ot2 --tag <app-tag> --wait`
+6. **Human:** wait for builds to finish
+7. **Invalidate CDN:** `just invalidate-cloudfront --non-interactive --path flex|ot2 --tag <app-tag> --execute --wait` (omit `--execute` to print the AWS command only)
+8. **Verify assets:** `just verify-release-assets --non-interactive --path flex|ot2 --tag <app-tag>`
+9. **Optional:** browse manifests with `just ot2-assets` / `just flex-assets` or regenerate `just assets-pages`
+
+**Agent rule:** use `just go-plan`, not `just go`, for release planning. Do **not** print raw `git tag` / `git push` commands; point the operator at the plan file and `just apply-release-plan` instead.
+
+### `just go-plan` (`automation/go.py`)
+
+Agent-oriented release planning. Equivalent to `just go --non-interactive --skip-assumptions --write-plan --plan-only`. Syncs repos, writes `.build/plans/<app-tag>.plan.yaml`, and prints apply instructions. Does **not** print raw git tag commands.
+
+```bash
+just go-plan --path flex --release-type internal --stability beta --version v4.0.0
+just go-plan --path flex --release-type internal --stability alpha --version v4.0.0 --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main
+```
 
 ### `just go` (`automation/go.py`)
 
@@ -218,6 +233,9 @@ Syncs stack repos locally and prints release analysis plus suggested tag command
 | `--version` | Base version. Flex: `vX.Y.Z`. OT-2 internal: `YY.M.DNN`. OT-2 external: `YY.M.N` |
 | `--app-branch` | Branch to tag in the app monorepo (`opentrons` or `opentrons-ot2`) |
 | `--stack-branch REPO=BRANCH` | Branch to tag for a stack repo (repeatable; e.g. `oe-core=main`) |
+| `--write-plan` | Write a reviewable YAML plan to `.build/plans/<app-tag>.plan.yaml` |
+| `--plan-dir PATH` | Output directory for `--write-plan` (default: `.build/plans`) |
+| `--plan-only` | With `--write-plan`, skip Rich tables and only write the plan file |
 | `--skip-assumptions` | Omit the assumptions panel (cleaner agent output) |
 | `--non-interactive` | Never prompt; use defaults for omitted flags |
 
@@ -229,9 +247,32 @@ Syncs stack repos locally and prints release analysis plus suggested tag command
 just go --non-interactive --skip-assumptions --path ot2 --release-type internal --stability alpha
 just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0
 just go --non-interactive --skip-assumptions --path flex --release-type internal --stability alpha --version v4.0.0 --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main
+just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0 --write-plan --plan-only
 ```
 
-**Output includes:** latest-tag summary (stable / alpha / beta lanes at the semver base), release flavor lanes panel, change-since-tag tables (same lane on release branch), tag push order, per-repo tag plans (`git checkout` when release branch differs from default, then `git tag -a` / `git push` suggestions), app tag section, and a **Next steps** panel with `track-builds`, `invalidate-cloudfront --execute --wait`, and `verify-release-assets` commands.
+**Output includes:** latest-tag summary (stable / alpha / beta lanes at the semver base), release flavor lanes panel, change-since-tag tables (same lane on release branch), tag push order, per-repo tag plans (`git checkout` when release branch differs from default, then `git tag -a` / `git push` suggestions), app tag section, and a **Next steps** panel with `track-builds`, `invalidate-cloudfront --execute --wait`, and `verify-release-assets` commands. With `--write-plan`, also writes a YAML plan file named after the app tag.
+
+### `just apply-release-plan` (`automation/apply_release_plan.py`)
+
+Applies a reviewed release plan in push order with pre-flight git verification. Verifies each pending repo's `origin/<branch>` and local `HEAD` match the plan's recorded `head_commit` before creating or pushing tags. **Resumes safely after partial apply:** repos whose tags already exist on origin at the planned commit are skipped (`applied`). Refuses to continue when a pending repo's branch tip drifted (`drifted`, regenerate with `just go-plan`) or when a tag exists at the wrong commit (`conflict`). On Flex, runs `just validate-release-tags` after creating the app tag locally and before pushing it.
+
+**Apply readiness statuses:** `pending` (ready), `applied` (skip), `drifted` (blocked, regenerate plan), `conflict` (blocked, manual fix).
+
+**Side effects:** `git checkout`, `git tag -a`, `git push` in cloned stack repos when not using `--dry-run` or `--verify-only`.
+
+| Flag | Purpose |
+|---|---|
+| `--plan PATH` | Path to a `.plan.yaml` file from `just go-plan` or `just go --write-plan` (required) |
+| `--workspace-root PATH` | Workspace root containing cloned repos (default: `.`) |
+| `--dry-run` | Verify and print git commands without changing anything |
+| `--verify-only` | Run pre-flight verification only |
+| `--yes` / `-y` | Skip the confirmation prompt |
+| `--non-interactive` | Require `--yes`, `--dry-run`, or `--verify-only` |
+
+```bash
+just apply-release-plan --plan .build/plans/ot3@4.0.0-beta.0.plan.yaml --dry-run
+just apply-release-plan --plan .build/plans/ot3@4.0.0-beta.0.plan.yaml --yes
+```
 
 ### `just track-builds` (`automation/track_builds.py`)
 

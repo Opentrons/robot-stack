@@ -8,17 +8,18 @@ Open this repo in [Cursor](https://cursor.com) and start a chat along these line
 
 > I need to do a new release for **Flex** (or **OT-2**). It will be **internal** or **external**, and **stable**, **alpha**, or **beta**.
 
-Workspace rules in `.cursor/rules/` teach the agent how to run the scripts below. It will sync local clones, print release analysis, and suggest copy-paste `git tag` / `git push` commands. **Nothing is pushed automatically**; CloudFront invalidation runs only when you pass `--execute` to `just invalidate-cloudfront`.
+Workspace rules in `.cursor/rules/` teach the agent how to run the scripts below. It syncs local clones, writes a reviewable plan file (`.build/plans/<app-tag>.plan.yaml`), and points you at `just apply-release-plan` for tag pushes. **Nothing is pushed automatically** except when you explicitly run `just apply-release-plan --yes`; CloudFront invalidation runs only when you pass `--execute` to `just invalidate-cloudfront`.
 
 Prompt Cursor as above and it will walk you through the full release in order, running the advisory scripts and printing what to do next at each stage:
 
-1. **Plan tags** — runs `just go` to show what needs tags and the tag shape per repo.
-2. **Push tags** — prints `git tag` / `git push` commands for you to run (stack repos first, app last).
-3. **Validate coordinated tags (Flex)** — runs `just validate-release-tags` to confirm stack tags on `opentrons`/`oe-core`, the mapped `ex*`/`ot3@` coordination tag plus integer `vN` on `ot3-firmware`, before you push the app tag.
-4. **Track builds** — runs `just track-builds` after the app tag is pushed to surface app, kickoff, and robot OS workflow runs.
-5. **Verify builds** — wait for CI to finish.
-6. **Invalidate CDN** — runs `just invalidate-cloudfront --execute --wait` to submit CloudFront invalidation and poll until it completes (omit `--execute` to print the AWS command only).
-7. **Verify assets** — runs `just verify-release-assets` to check manifests, updater YAMLs, and artifact URLs for the tag.
+1. **Plan tags** — runs `just go-plan` to write `.build/plans/<app-tag>.plan.yaml` for review (agents should use this instead of printing raw git commands).
+2. **Review plan** — inspect branch, `head_commit`, and checksum in the plan file.
+3. **Push tags** — run `just apply-release-plan --plan ... --dry-run` then `--yes`. Apply refuses stale plans when origin branch tips drift; regenerate with `just go-plan` if needed.
+4. **Validate coordinated tags (Flex)** — `just apply-release-plan` runs `just validate-release-tags` after creating the app tag locally and before pushing it. You can also run validate standalone when tagging manually.
+5. **Track builds** — runs `just track-builds` after the app tag is pushed to surface app, kickoff, and robot OS workflow runs.
+6. **Verify builds** — wait for CI to finish.
+7. **Invalidate CDN** — runs `just invalidate-cloudfront --execute --wait` to submit CloudFront invalidation and poll until it completes (omit `--execute` to print the AWS command only).
+8. **Verify assets** — runs `just verify-release-assets` to check manifests, updater YAMLs, and artifact URLs for the tag.
 
 ### TODO: release checklists
 
@@ -45,8 +46,11 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 - format and lint Python
   - `uv run just fix`
 - sync repos and inspect release state
-  - `uv run just go`
-  - non-interactive example: `uv run just go --non-interactive --skip-assumptions --path flex --release-type internal --stability beta --version v4.0.0 --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main`
+  - `uv run just go` (interactive tables and suggested commands)
+  - `uv run just go-plan --path flex --release-type internal --stability beta --version v4.0.0` (agent default: plan file only)
+- apply a reviewed release plan (after dry-run)
+  - `uv run just apply-release-plan --plan .build/plans/ot3@4.0.0-beta.0.plan.yaml --dry-run`
+  - `uv run just apply-release-plan --plan .build/plans/ot3@4.0.0-beta.0.plan.yaml --yes`
 - verify a coordinated Flex tag exists in all three stack repos (before pushing the app tag)
   - `uv run just validate-release-tags --tag ot3@4.0.0-beta.0`
 - find GitHub Actions runs after pushing an app tag
@@ -75,7 +79,20 @@ Instead of make, use [just](https://github.com/casey/just). The VS Code justfile
 just go ... --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main
 ```
 
-When the release branch differs from the repo default, `just go` prints `git checkout <branch>` before suggested tag commands.
+When the release branch differs from the repo default, the plan file includes a `checkout` step before tagging.
+
+### Release plan apply statuses
+
+`just apply-release-plan` classifies each repo before tagging:
+
+| Status | Meaning |
+|---|---|
+| `pending` | Branch tip matches plan, tags not on origin yet. Ready to tag. |
+| `applied` | All planned tags already exist on origin at the planned commit. Safe to skip (resume). |
+| `drifted` | Tags not pushed yet, but `origin/<branch>` moved since the plan was generated. Blocked; regenerate with `just go-plan`. |
+| `conflict` | Tag exists on origin but points at the wrong commit. Blocked; manual fix required. |
+
+Plans include a `head_commit_checksum` for staleness detection. Apply resumes safely after partial tag pushes when already-applied repos match origin.
 
 ### Tag push order
 
@@ -133,13 +150,14 @@ When **both** beta and alpha channels need fresh builds in the **same cycle**, p
 
 Tag push order can differ from publish order. YAML pointers follow the **last desktop build publish**, not which tag was created first. If beta publishes without a follow-up alpha, alpha-channel users keep seeing the beta build even when alpha artifacts remain in `releases.json` (for example internal Flex `4.0.0-alpha.4` tagged before `4.0.0-beta.1`, but `alpha.yml` now points at beta.1). Configured in `opentrons/app-shell/electron-builder.config.js` via `generateUpdatesFilesForAllChannels: true`. See [release channel hierarchy](https://opentrons.github.io/robot-stack/release-channel-hierarchy.html).
 
-Before pushing the app tag, run `just validate-release-tags --tag <app-tag>`. `go` prints this in the Next steps panel.
+Before pushing the app tag, run `just validate-release-tags --tag <app-tag>` (or let `just apply-release-plan` run it after creating the tag locally). `go` prints this in the Next steps panel.
 
-**Example (4.0.0 internal):** alphas at `ot3@4.0.0-alpha.3`; beta lane may already have `ot3@4.0.0-beta.0` from another branch. A new alpha from `edge` suggests `ot3@4.0.0-alpha.4`.
+**Example (4.0.0 internal alpha):**
 
 ```bash
-just go --non-interactive --skip-assumptions --path flex --release-type internal --stability alpha --version v4.0.0 --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main
-just validate-release-tags --tag ot3@4.0.0-alpha.4
+just go-plan --path flex --release-type internal --stability alpha --version v4.0.0 --app-branch edge --stack-branch oe-core=main --stack-branch ot3-firmware=main
+just apply-release-plan --plan .build/plans/ot3@4.0.0-alpha.5.plan.yaml --dry-run
+just apply-release-plan --plan .build/plans/ot3@4.0.0-alpha.5.plan.yaml --yes
 ```
 
 ### Track release builds
