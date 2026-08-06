@@ -466,7 +466,9 @@ git push origin v70 ex9.1.0-alpha.7</code></pre>
       <code>v9.1.0-beta.0</code> → <code>ex9.1.0-beta.0</code>) plus integer <code>vN</code>.
       Validate with <code>just validate-release-tags --tag &lt;app-tag&gt;</code> before pushing
       the app tag. See <a href="flex-coordinated-tags.html">coordinated tagging</a> and
-      <a href="release-channel-hierarchy.html">release channel hierarchy</a>.</p>
+      <a href="release-channel-hierarchy.html">release channel hierarchy</a>.
+      For stable-only branch and post-publish extras, use the
+      <a href="flex-stable-checklist.html">Flex stable release checklist</a>.</p>
     </div>
     """
     return _wrap_page("flex-external.html", "external releases", body, robot_name="Flex")
@@ -680,7 +682,8 @@ def render_ot2_external() -> str:
       <code>v26.6.0-alpha.N</code> on the same base. After <code>v26.6.0</code> stable, the next alpha cycle is
       <code>v26.6.1-alpha.0</code>, not <code>v26.6.0-alpha.0</code>. QA cycles on the same base increment the
       prerelease number only. See <a href="release-channel-hierarchy.html">release channel hierarchy</a> for how alpha,
-      beta, and stable updater YAMLs interact.</p>
+      beta, and stable updater YAMLs interact. For stable-only branch and post-publish extras, use the
+      <a href="ot2-stable-checklist.html">OT-2 stable release checklist</a>.</p>
     </div>
     """
     return _wrap_page("ot2-external.html", "external releases", body, robot_name="OT-2")
@@ -786,6 +789,11 @@ def publish_release_guides(output_dir: Path) -> None:
         render_flex_coordinated_tags_page,
         render_release_channel_hierarchy_page,
     )
+    from automation.mergeback_guide import render_mergeback_guide_page
+    from automation.stable_release_checklist import (
+        render_flex_stable_checklist_page,
+        render_ot2_stable_checklist_page,
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     pages = {
@@ -795,6 +803,9 @@ def publish_release_guides(output_dir: Path) -> None:
         "ot2-internal.html": render_ot2_internal(),
         "flex-coordinated-tags.html": render_flex_coordinated_tags_page(),
         "release-channel-hierarchy.html": render_release_channel_hierarchy_page(),
+        "mergeback-guide.html": render_mergeback_guide_page(),
+        "flex-stable-checklist.html": render_flex_stable_checklist_page(),
+        "ot2-stable-checklist.html": render_ot2_stable_checklist_page(),
     }
     for filename, content in pages.items():
         path = output_dir / filename

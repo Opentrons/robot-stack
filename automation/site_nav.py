@@ -68,6 +68,9 @@ GUIDE_NAV: Final[Tuple[SiteLink, ...]] = tuple(link for group in PRODUCT_NAV for
 FLEX_STRATEGY_NAV: Final[Tuple[SiteLink, ...]] = (
     SiteLink("flex-coordinated-tags.html", "Coordinated tags"),
     SiteLink("release-channel-hierarchy.html", "Channel hierarchy"),
+    SiteLink("mergeback-guide.html", "Mergebacks"),
+    SiteLink("flex-stable-checklist.html", "Flex stable checklist"),
+    SiteLink("ot2-stable-checklist.html", "OT-2 stable checklist"),
 )
 
 
