@@ -8,7 +8,7 @@ This document is the spec. Build a first version from it, demo that version, the
 
 ## How we will ship it
 
-1. **Build.** Implement the page in this repo from the manifests and filters below, and stand up the hosting in Terraform all the way to `https://robot-builds.opentrons.com`. The demo runs on that real URL with real download links and scheduled publishing on.
+1. **Build.** Implement the page in this repo from the manifests and filters below, and stand up the hosting in Terraform all the way to `https://robot.builds.opentrons.com`. The demo runs on that real URL with real download links and scheduled publishing on.
 2. **Demo.** Walk Nusrat Begum, Alex Copperman, Jess Spangler, and Joe through current stable, current beta, OT-2, the QA-only alpha view, and the full-image disclosure.
 3. **Adjust.** Change copy, filters, layout, and the hostname if they want a different one, then point FAS at the page. A hostname change is a DNS and certificate change, not a rebuild.
 
@@ -50,7 +50,7 @@ Each robot entry is `fullImage`, `system`, `version`, `releaseNotes`. The system
 
 ## Page behavior
 
-Recommended public URL: `https://robot-builds.opentrons.com`. The artifacts are already world-readable, so a login wall does not add protection. The page's job is to name the right file.
+Public URL: `https://robot.builds.opentrons.com`, a name under the existing `builds.opentrons.com` zone. The artifacts are already world-readable, so a login wall does not add protection. The page's job is to name the right file.
 
 - Flex and OT-2 on one page.
 - Two banners: current stable and current beta. Stable is the customer default. Beta is labeled as beta and shown as a prominent banner, because Flex beta `10.2.0-beta.0` is ahead of stable `9.1.2` and the team uses betas more now.
@@ -70,7 +70,7 @@ flowchart LR
   ot2Robot[OT2_ot2_br_releases_json]
   ot2App[OT2_app_releases_json]
   publisher[robot_stack_publisher]
-  site[robot_builds.opentrons.com]
+  site[robot.builds.opentrons.com]
   fas[FAS_and_support]
   flexRobot --> publisher
   flexApp --> publisher
@@ -89,12 +89,9 @@ Publish a static page from this repo. A browser `fetch()` of the manifests would
 
 ### Infrastructure
 
-Everything is in Terraform except what has to stay in the AWS root account (the `opentrons.com` hosted zone and registrar). Jesse decides where the Terraform lives and which account hosts it:
+The Terraform lives in [`robot-stack-infra`](https://github.com/Opentrons/robot-stack-infra), in its own stack, isolated from the release buckets. It uses the robot-stack prod account, which already hosts the `builds.opentrons.com` zone.
 
-- [`robot-stack-infra`](../robot-stack-infra/) already defines the builds manifests and their distributions, so it is the default home.
-- A new account or module is fine if Jesse thinks this page should be isolated from the release buckets.
-
-Terraform covers the S3 bucket, the CloudFront distribution, the ACM certificate (us-east-1), the response headers policy, and a GitHub OIDC role scoped to uploading this page from the `Opentrons/robot-stack` publish workflow. The `robot-builds` DNS record and certificate validation records are the only root-account changes. Changing the hostname later means a new record and certificate, not a new distribution.
+Terraform covers the S3 bucket, the CloudFront distribution, the ACM certificate (us-east-1), the response headers policy, and a GitHub OIDC role scoped to uploading this page from the `Opentrons/robot-stack` publish workflow. The alias and certificate validation records are added to the existing `builds.opentrons.com` zone. There is no new zone and no root-account DNS change. Changing the hostname later means a new record and certificate in that zone, not a new distribution.
 
 ### Publishing
 
@@ -122,7 +119,7 @@ The page footer shows when it was generated and the manifest snapshot it reflect
 
 These do not block the first build. Answer them in the demo, then adjust.
 
-- Keep `robot-builds.opentrons.com`, or rename it? A rename is a DNS and certificate change only.
+- Hostname is `robot.builds.opentrons.com`, under the existing `builds.opentrons.com` zone. A later rename is a DNS record and certificate change only.
 - May FAS forward the URL to a customer, or is it an internal lookup that should stay out of customer email?
 - OT-2 on the same page in the first version. Recommendation: yes. Alex's page already promised it and then hardcoded one release.
 - Is three weekday publishes plus a release-time dispatch fresh enough?
