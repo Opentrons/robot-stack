@@ -3,8 +3,9 @@
 
 Spec: docs/robot-builds-page.md. The page links to the external release
 manifests. It does not read electron-updater YAMLs and it does not include
-internal hosts. Stable and beta builds are on the main page. Alpha builds are
-on a separate QA page that the main page does not link to.
+internal hosts. Stable builds are on the main page. Alpha builds are
+on a separate QA page that the main page does not link to. Beta builds are
+not shown.
 
 Usage:
     uv run ./automation/robot_builds_page.py
@@ -35,7 +36,7 @@ from automation.ot2_calendar_semver import decode_ot2_external_version
 from automation.ot2_urls import OT2_EXTERNAL, OT2_ROBOT_PREFIX
 from automation.release import robot_manifest_production_entries
 
-Channel = Literal["stable", "beta", "alpha"]
+Channel = Literal["stable", "alpha"]
 
 QA_ALPHA_HREF = "qa/alpha/"
 DEFAULT_OUTPUT_DIR = Path(".build/robot-builds")
@@ -94,7 +95,6 @@ class BuildRow:
 class ProductBuilds:
     name: str
     stable: BuildRow | None
-    beta: BuildRow | None
     history: tuple[BuildRow, ...]
     alphas: tuple[BuildRow, ...]
 
@@ -140,8 +140,7 @@ def _flex_channel(version: str) -> Channel | None:
     tag = parsed.prerelease.split(".", 1)[0]
     if tag == "alpha":
         return "alpha"
-    if tag == "beta":
-        return "beta"
+    # Beta is intentionally omitted from the public page.
     return None
 
 
@@ -155,8 +154,7 @@ def _ot2_channel(version: str) -> Channel | None:
         return "stable"
     if prerelease == "alpha":
         return "alpha"
-    if prerelease == "beta":
-        return "beta"
+    # Beta is intentionally omitted from the public page.
     return None
 
 
@@ -219,11 +217,12 @@ def assemble_products(
 
 def _split_product(name: str, rows: list[BuildRow]) -> ProductBuilds:
     stable = next((row for row in rows if row.channel == "stable"), None)
-    beta = next((row for row in rows if row.channel == "beta"), None)
-    banner_versions = {row.version for row in (stable, beta) if row is not None}
-    history = tuple(row for row in rows if row.channel != "alpha" and row.version not in banner_versions)
+    banner_versions = {stable.version} if stable is not None else set()
+    history = tuple(
+        row for row in rows if row.channel == "stable" and row.version not in banner_versions
+    )
     alphas = tuple(row for row in rows if row.channel == "alpha")
-    return ProductBuilds(name=name, stable=stable, beta=beta, history=history, alphas=alphas)
+    return ProductBuilds(name=name, stable=stable, history=history, alphas=alphas)
 
 
 def _action(url: str, label: str) -> str:
@@ -234,9 +233,7 @@ def _action(url: str, label: str) -> str:
 
 def _render_row(row: BuildRow, *, banner: str | None) -> str:
     badge = ""
-    if row.channel == "beta":
-        badge = '<span class="badge beta">Beta</span>'
-    elif row.channel == "stable" and banner:
+    if row.channel == "stable" and banner:
         badge = '<span class="badge stable">Stable</span>'
     actions = [
         _action(row.system_url, "Robot system update"),
@@ -267,11 +264,10 @@ def _render_banner(row: BuildRow | None, kind: str, blurb: str) -> str:
 def _render_product_main(product: ProductBuilds) -> str:
     history = "".join(_render_row(row, banner=None) for row in product.history)
     if not history:
-        history = '<p class="empty">No older stable or beta builds.</p>'
+        history = '<p class="empty">No older stable builds.</p>'
     return (
         f'<section data-product="{_esc(product.name.lower())}">'
         f"<h2>{_esc(product.name)}</h2>"
-        f"{_render_banner(product.beta, 'beta', 'Beta. The team is using this build. It is ahead of the customer default.')}"
         f"{_render_banner(product.stable, 'stable', 'Stable. This is the customer default.')}"
         f'<div data-history=""><h3>Older builds</h3>{history}</div></section>'
     )
@@ -318,7 +314,6 @@ input[type="search"] {
 }
 .banner, .release, section { background: var(--card); border: 1px solid var(--line); border-radius: 0.6rem; }
 .banner { padding: 0.8rem 1rem 0.4rem; margin: 0 0 0.8rem; }
-.banner.beta { border-color: #b45309; }
 .banner.stable { border-color: #047857; }
 .blurb { font-size: 0.92rem; margin-bottom: 0.4rem; }
 .release { padding: 0.7rem 0.2rem 0.2rem; }
@@ -330,7 +325,6 @@ input[type="search"] {
   font-size: 0.72rem; font-weight: 650; letter-spacing: 0.02em; text-transform: uppercase;
   border-radius: 999px; padding: 0.05rem 0.45rem;
 }
-.badge.beta { color: #9a3412; background: #ffedd5; }
 .badge.stable { color: #065f46; background: #ecfdf5; }
 .reflash { margin: 0 0 0.6rem; font-size: 0.92rem; }
 footer { font-size: 0.85rem; margin-top: 1.5rem; }
@@ -373,8 +367,7 @@ def render_pages(
     footer = _footer(generated_at, sources)
     main_body = (
         "<h1>Opentrons robot builds</h1>"
-        '<p class="lede">Stable and beta downloads for Flex and OT-2. Stable is the file to send a customer. '
-        "Beta is labeled and shown first.</p>"
+        '<p class="lede">Stable downloads for Flex and OT-2. Stable is the file to send a customer.</p>'
         '<input id="search" type="search" placeholder="Filter older builds by version" '
         'aria-label="Filter older builds by version">'
         f"{_render_product_main(flex)}{_render_product_main(ot2)}{footer}"
