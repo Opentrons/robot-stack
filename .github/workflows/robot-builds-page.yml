@@ -1,0 +1,101 @@
+name: Publish robot builds page
+
+# Hosting lives in Opentrons/robot-stack-infra (robot-builds stack).
+# The OIDC role trusts main only and rejects GitHub Environments.
+on:
+  schedule:
+    # Weekdays 9 AM / noon / 4 PM Eastern (EST); one hour later during EDT.
+    - cron: "0 14,17,21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Publish even when manifests and source commit are unchanged
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: robot-builds-page
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish to robot.builds.opentrons.com
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      SITE_BUCKET: robot.builds.opentrons.com
+      OUTPUT_DIR: .build/robot-builds
+      PUBLISH_ROLE_ARN: arn:aws:iam::879285218407:role/github-actions-robot-builds-prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ env.PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Fetch previous publish state
+        id: previous
+        run: |
+          set -euo pipefail
+          mkdir -p "${OUTPUT_DIR}"
+          if aws s3 cp "s3://${SITE_BUCKET}/manifest-state.json" "${OUTPUT_DIR}/previous-manifest-state.json"; then
+            echo "path=${OUTPUT_DIR}/previous-manifest-state.json" >> "${GITHUB_OUTPUT}"
+          else
+            echo "No previous manifest-state.json; will publish."
+            echo "path=" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Generate pages
+        id: generate
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          args=(--output-dir "${OUTPUT_DIR}")
+          if [ -n "${{ steps.previous.outputs.path }}" ]; then
+            args+=(--previous-state "${{ steps.previous.outputs.path }}")
+          fi
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            args+=(--force)
+          fi
+          uv run ./automation/robot_builds_page.py "${args[@]}" | tee /tmp/robot-builds-generate.txt
+          if grep -qx 'SKIP_PUBLISH' /tmp/robot-builds-generate.txt; then
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+          elif grep -qx 'PUBLISH' /tmp/robot-builds-generate.txt; then
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "Generator did not report PUBLISH or SKIP_PUBLISH" >&2
+            exit 1
+          fi
+
+      - name: Upload site
+        if: steps.generate.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          # Terraform owns 404.html; do not delete it on sync.
+          aws s3 sync "${OUTPUT_DIR}/" "s3://${SITE_BUCKET}/" \
+            --delete \
+            --exclude "404.html" \
+            --exclude "previous-manifest-state.json"
+          echo "Published https://robot.builds.opentrons.com/ (visible within a few minutes)."
+
+      - name: Skip upload
+        if: steps.generate.outputs.publish != 'true'
+        run: echo "Manifests and source commit unchanged; skipped upload."
