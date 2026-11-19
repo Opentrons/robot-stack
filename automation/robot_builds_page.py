@@ -9,12 +9,16 @@ on a separate QA page that the main page does not link to.
 Usage:
     uv run ./automation/robot_builds_page.py
     uv run ./automation/robot_builds_page.py --serve
+    uv run ./automation/robot_builds_page.py --previous-state /tmp/prev.json
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +40,9 @@ Channel = Literal["stable", "beta", "alpha"]
 QA_ALPHA_HREF = "qa/alpha/"
 DEFAULT_OUTPUT_DIR = Path(".build/robot-builds")
 DEFAULT_PORT = 8767
+STATE_FILENAME = "manifest-state.json"
+SKIP_PUBLISH = "SKIP_PUBLISH"
+DO_PUBLISH = "PUBLISH"
 
 INSTALLER_SUFFIXES: tuple[tuple[str, str], ...] = (
     (".dmg", "macOS app"),
@@ -395,19 +402,59 @@ def write_pages(output_dir: Path, main_html: str, alpha_html: str) -> tuple[Path
     return main_path, alpha_path
 
 
-def fetch_manifests(sources: ManifestSources) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+def build_manifest_state(
+    sources: ManifestSources,
+    body_by_url: dict[str, bytes],
+    *,
+    source_sha: str = "",
+) -> dict[str, Any]:
+    """Hashes for the four manifests, plus the publishing commit when known."""
+    manifests = {
+        url: hashlib.sha256(body_by_url[url]).hexdigest() for url in sources.as_tuple()
+    }
+    return {
+        "version": 1,
+        "source_sha": source_sha,
+        "manifests": manifests,
+    }
+
+
+def load_manifest_state(path: Path) -> dict[str, Any]:
+    """Load a previously published state file."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} is not a JSON object")
+    return data
+
+
+def publish_is_unchanged(previous: dict[str, Any] | None, current: dict[str, Any]) -> bool:
+    """True when manifests and source commit both match the last publish."""
+    if previous is None:
+        return False
+    return (
+        previous.get("manifests") == current.get("manifests")
+        and previous.get("source_sha") == current.get("source_sha")
+        and bool(previous.get("manifests"))
+    )
+
+
+def fetch_manifests(
+    sources: ManifestSources,
+) -> tuple[tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, bytes]]:
     """Fetch the four manifests. Raise if any request fails, so a bad run writes nothing."""
     loaded: list[dict[str, Any]] = []
+    bodies: dict[str, bytes] = {}
     with httpx.Client(follow_redirects=True, timeout=30.0) as client:
         for url in sources.as_tuple():
             response = client.get(url)
             response.raise_for_status()
+            bodies[url] = response.content
             data = response.json()
             if not isinstance(data, dict):
                 raise RuntimeError(f"{url} did not return a JSON object")
             loaded.append(data)
     flex_robot, flex_app, ot2_robot, ot2_app = loaded
-    return flex_robot, flex_app, ot2_robot, ot2_app
+    return (flex_robot, flex_app, ot2_robot, ot2_app), bodies
 
 
 def _serve(directory: Path, port: int) -> None:
@@ -430,17 +477,43 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--serve", action="store_true", help="Serve the generated pages on 127.0.0.1.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument(
+        "--previous-state",
+        type=Path,
+        default=None,
+        help="Published manifest-state.json from the site bucket. Skip writing when unchanged.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Publish even when manifests and source commit match the previous state.",
+    )
     args = parser.parse_args()
 
     sources = ManifestSources.external()
+    source_sha = os.environ.get("GITHUB_SHA", "").strip()
     try:
-        manifests = fetch_manifests(sources)
+        manifests, bodies = fetch_manifests(sources)
     except Exception as error:  # noqa: BLE001 - one message, and do not write a partial page
         raise SystemExit(f"Not writing the page; a manifest fetch failed: {error}") from error
+
+    state = build_manifest_state(sources, bodies, source_sha=source_sha)
+    previous: dict[str, Any] | None = None
+    if args.previous_state is not None and args.previous_state.is_file():
+        previous = load_manifest_state(args.previous_state)
+
+    if not args.force and publish_is_unchanged(previous, state):
+        print(SKIP_PUBLISH)
+        return
+
     main_html, alpha_html = render_pages(*manifests, sources, datetime.now(timezone.utc))
     main_path, alpha_path = write_pages(args.output_dir, main_html, alpha_html)
+    state_path = args.output_dir / STATE_FILENAME
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Wrote {main_path.resolve()}")
     print(f"Wrote {alpha_path.resolve()}")
+    print(f"Wrote {state_path.resolve()}")
+    print(DO_PUBLISH)
     if args.serve:
         _serve(args.output_dir, args.port)
 

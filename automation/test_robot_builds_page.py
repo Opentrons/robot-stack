@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from automation.robot_builds_page import (
     QA_ALPHA_HREF,
     ManifestSources,
+    build_manifest_state,
+    publish_is_unchanged,
     render_pages,
 )
 
@@ -160,6 +162,36 @@ class RobotBuildsPageTest(unittest.TestCase):
             self.assertIn("Generated 2026-11-16 15:00 UTC.", page)
             for url in SOURCES.as_tuple():
                 self.assertIn(url, page)
+
+
+
+class ManifestStateTest(unittest.TestCase):
+    def test_unchanged_when_manifests_and_source_match(self) -> None:
+        sources = SOURCES
+        bodies = {url: f"body-{i}".encode() for i, url in enumerate(sources.as_tuple())}
+        current = build_manifest_state(sources, bodies, source_sha="abc")
+        self.assertTrue(publish_is_unchanged(current, current))
+
+    def test_changed_when_a_manifest_hash_differs(self) -> None:
+        sources = SOURCES
+        bodies = {url: f"body-{i}".encode() for i, url in enumerate(sources.as_tuple())}
+        previous = build_manifest_state(sources, bodies, source_sha="abc")
+        bodies[sources.flex_robot] = b"different"
+        current = build_manifest_state(sources, bodies, source_sha="abc")
+        self.assertFalse(publish_is_unchanged(previous, current))
+
+    def test_changed_when_source_sha_differs(self) -> None:
+        sources = SOURCES
+        bodies = {url: f"body-{i}".encode() for i, url in enumerate(sources.as_tuple())}
+        previous = build_manifest_state(sources, bodies, source_sha="abc")
+        current = build_manifest_state(sources, bodies, source_sha="def")
+        self.assertFalse(publish_is_unchanged(previous, current))
+
+    def test_missing_previous_state_is_a_publish(self) -> None:
+        sources = SOURCES
+        bodies = {url: b"x" for url in sources.as_tuple()}
+        current = build_manifest_state(sources, bodies, source_sha="abc")
+        self.assertFalse(publish_is_unchanged(None, current))
 
 
 if __name__ == "__main__":
