@@ -145,20 +145,47 @@ class RobotBuildsPageTest(unittest.TestCase):
         self.assertNotIn("revoked-robot.zip", main)
         self.assertNotIn(">9.0.0<", main)
 
-    def test_system_zip_is_primary_and_full_image_is_in_the_disclosure(self) -> None:
+
+    def test_older_builds_preview_then_expand(self) -> None:
+        versions = {
+            f"{9 - i}.0.0": _robot(f"https://example.test/system-{9 - i}.zip")
+            for i in range(6)
+        }
+        main, _alpha = _render(flex_robot={"productionV2": versions})
+        history = main.split('data-history=""', 1)[1].split("</section>", 1)[0]
+        # current stable 9.0.0 is the banner; older are 8..4 -> 5 older, preview 3 + 2 more
+        self.assertIn("8.0.0", history)
+        self.assertIn("7.0.0", history)
+        self.assertIn("6.0.0", history)
+        self.assertIn('class="history-more"', history)
+        self.assertIn("Show 2 more", history)
+        preview, _sep, more = history.partition('<details class="history-more">')
+        self.assertIn("8.0.0", preview)
+        self.assertIn("7.0.0", preview)
+        self.assertIn("6.0.0", preview)
+        self.assertNotIn("5.0.0", preview)
+        self.assertIn("5.0.0", more)
+        self.assertIn("4.0.0", more)
+
+    def test_system_zip_is_primary_and_full_image_is_only_on_current_stable(self) -> None:
         main, _alpha = _render(
             flex_robot={
                 "productionV2": {
                     "9.1.2": _robot("https://example.test/system.zip", "https://example.test/full-image.tar"),
+                    "9.0.0": _robot("https://example.test/older-system.zip", "https://example.test/older-full-image.tar"),
                 }
             }
         )
-        row = main.split('data-version="9.1.2"', 1)[1].split("</article>", 1)[0]
-        actions, _separator, disclosure = row.partition("<details")
+        banner = main.split('data-banner="stable"', 1)[1].split("</article>", 1)[0]
+        actions, _separator, disclosure = banner.partition("<details")
         self.assertIn("https://example.test/system.zip", actions)
         self.assertNotIn("https://example.test/full-image.tar", actions)
         self.assertIn("https://example.test/full-image.tar", disclosure)
         self.assertIn("Full reflash image", disclosure)
+        history = main.split('data-history=""', 1)[1]
+        self.assertIn("https://example.test/older-system.zip", history)
+        self.assertNotIn("https://example.test/older-full-image.tar", history)
+        self.assertNotIn("Full reflash image", history)
 
     def test_footer_names_the_manifests_and_the_generation_time(self) -> None:
         main, alpha = _render()
