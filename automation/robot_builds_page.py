@@ -232,7 +232,7 @@ def _action(url: str, label: str) -> str:
     return f'<li><a href="{_esc(url)}">{_esc(label)}</a></li>'
 
 
-def _render_row(row: BuildRow, *, banner: str | None) -> str:
+def _render_row(row: BuildRow, *, banner: str | None, include_full_image: bool = False) -> str:
     badge = ""
     if row.channel == "stable" and banner:
         badge = '<span class="badge stable">Stable</span>'
@@ -242,7 +242,7 @@ def _render_row(row: BuildRow, *, banner: str | None) -> str:
         _action(row.release_notes_url, "Release notes"),
     ]
     reflash = ""
-    if row.full_image_url:
+    if include_full_image and row.full_image_url:
         reflash = (
             '<details class="reflash"><summary>Full reflash image</summary>'
             "<p>This replaces the robot's whole software image. Use it to reflash a robot, not for a normal update.</p>"
@@ -259,7 +259,10 @@ def _render_row(row: BuildRow, *, banner: str | None) -> str:
 def _render_banner(row: BuildRow | None, kind: str, blurb: str) -> str:
     if row is None:
         return ""
-    return f'<div class="banner {kind}"><p class="blurb">{blurb}</p>{_render_row(row, banner=kind)}</div>'
+    return (
+        f'<div class="banner {kind}"><p class="blurb">{blurb}</p>'
+        f"{_render_row(row, banner=kind, include_full_image=True)}</div>"
+    )
 
 
 def _render_product_main(product: ProductBuilds) -> str:
@@ -275,7 +278,7 @@ def _render_product_main(product: ProductBuilds) -> str:
 
 
 def _render_product_alpha(product: ProductBuilds) -> str:
-    rows = "".join(_render_row(row, banner=None) for row in product.alphas)
+    rows = "".join(_render_row(row, banner=None, include_full_image=True) for row in product.alphas)
     if not rows:
         rows = '<p class="empty">No alpha builds.</p>'
     return (

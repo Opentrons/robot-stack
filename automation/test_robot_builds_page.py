@@ -145,20 +145,25 @@ class RobotBuildsPageTest(unittest.TestCase):
         self.assertNotIn("revoked-robot.zip", main)
         self.assertNotIn(">9.0.0<", main)
 
-    def test_system_zip_is_primary_and_full_image_is_in_the_disclosure(self) -> None:
+    def test_system_zip_is_primary_and_full_image_is_only_on_current_stable(self) -> None:
         main, _alpha = _render(
             flex_robot={
                 "productionV2": {
                     "9.1.2": _robot("https://example.test/system.zip", "https://example.test/full-image.tar"),
+                    "9.0.0": _robot("https://example.test/older-system.zip", "https://example.test/older-full-image.tar"),
                 }
             }
         )
-        row = main.split('data-version="9.1.2"', 1)[1].split("</article>", 1)[0]
-        actions, _separator, disclosure = row.partition("<details")
+        banner = main.split('data-banner="stable"', 1)[1].split("</article>", 1)[0]
+        actions, _separator, disclosure = banner.partition("<details")
         self.assertIn("https://example.test/system.zip", actions)
         self.assertNotIn("https://example.test/full-image.tar", actions)
         self.assertIn("https://example.test/full-image.tar", disclosure)
         self.assertIn("Full reflash image", disclosure)
+        history = main.split('data-history=""', 1)[1]
+        self.assertIn("https://example.test/older-system.zip", history)
+        self.assertNotIn("https://example.test/older-full-image.tar", history)
+        self.assertNotIn("Full reflash image", history)
 
     def test_footer_names_the_manifests_and_the_generation_time(self) -> None:
         main, alpha = _render()
