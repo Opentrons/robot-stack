@@ -43,6 +43,7 @@ QA_ALPHA_HREF = "qa/alpha/"
 DEFAULT_OUTPUT_DIR = Path(".build/robot-builds")
 DEFAULT_PORT = 8767
 STATE_FILENAME = "manifest-state.json"
+DEFAULT_VISIBLE_HISTORY = 3
 SKIP_PUBLISH = "SKIP_PUBLISH"
 DO_PUBLISH = "PUBLISH"
 
@@ -265,10 +266,39 @@ def _render_banner(row: BuildRow | None, kind: str, blurb: str) -> str:
     )
 
 
+
+def _render_history_list(
+    rows: tuple[BuildRow, ...],
+    *,
+    include_full_image: bool,
+    empty_message: str,
+) -> str:
+    """Show a short preview, with the rest behind an expand control."""
+    if not rows:
+        return f'<p class="empty">{empty_message}</p>'
+    visible = rows[:DEFAULT_VISIBLE_HISTORY]
+    rest = rows[DEFAULT_VISIBLE_HISTORY:]
+    html = "".join(
+        _render_row(row, banner=None, include_full_image=include_full_image) for row in visible
+    )
+    if rest:
+        more = "".join(
+            _render_row(row, banner=None, include_full_image=include_full_image) for row in rest
+        )
+        html += (
+            f'<details class="history-more">'
+            f"<summary>Show {len(rest)} more</summary>"
+            f"{more}</details>"
+        )
+    return html
+
+
 def _render_product_main(product: ProductBuilds) -> str:
-    history = "".join(_render_row(row, banner=None) for row in product.history)
-    if not history:
-        history = '<p class="empty">No older stable builds.</p>'
+    history = _render_history_list(
+        product.history,
+        include_full_image=False,
+        empty_message="No older stable builds.",
+    )
     return (
         f'<section data-product="{_esc(product.name.lower())}">'
         f"<h2>{robot_name_html(product.name)}</h2>"
@@ -278,9 +308,11 @@ def _render_product_main(product: ProductBuilds) -> str:
 
 
 def _render_product_alpha(product: ProductBuilds) -> str:
-    rows = "".join(_render_row(row, banner=None, include_full_image=True) for row in product.alphas)
-    if not rows:
-        rows = '<p class="empty">No alpha builds.</p>'
+    rows = _render_history_list(
+        product.alphas,
+        include_full_image=True,
+        empty_message="No alpha builds.",
+    )
     return (
         f'<section data-product="{_esc(product.name.lower())}">'
         f"<h2>{robot_name_html(product.name)}</h2>"
@@ -411,6 +443,19 @@ section {
   background: color-mix(in srgb, var(--ok) 12%, transparent);
   vertical-align: middle;
 }
+.history-more {
+  margin: 0.35rem 0 0;
+  border-top: 1px solid var(--border);
+  padding-top: 0.55rem;
+}
+.history-more > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.95rem;
+  list-style: none;
+}
+.history-more > summary::-webkit-details-marker { display: none; }
+.history-more[open] > summary { margin-bottom: 0.25rem; }
 .reflash {
   margin: 0 0 0.55rem;
   font-size: 0.92rem;
@@ -437,9 +482,22 @@ _SEARCH_SCRIPT = """
 const input = document.getElementById("search");
 input.addEventListener("input", () => {
   const query = input.value.trim().toLowerCase();
-  document.querySelectorAll("[data-history] [data-version]").forEach((row) => {
-    const version = (row.getAttribute("data-version") || "").toLowerCase();
-    row.hidden = query.length > 0 && !version.includes(query);
+  document.querySelectorAll("[data-history]").forEach((block) => {
+    const more = block.querySelector("details.history-more");
+    let matchedInMore = false;
+    block.querySelectorAll("[data-version]").forEach((row) => {
+      const version = (row.getAttribute("data-version") || "").toLowerCase();
+      const match = query.length === 0 || version.includes(query);
+      row.hidden = !match;
+      if (match && query.length > 0 && more && more.contains(row)) {
+        matchedInMore = true;
+      }
+    });
+    if (more) {
+      more.open = matchedInMore;
+      more.hidden = query.length > 0 && !matchedInMore
+        && ![...more.querySelectorAll("[data-version]")].some((row) => !row.hidden);
+    }
   });
 });
 """
