@@ -57,6 +57,10 @@
 @assets-serve:
     uv run ./automation/publish_assets_pages.py --serve --open-browser
 
+# generate the public robot builds page from the external manifests
+@robot-builds *args:
+    uv run ./automation/robot_builds_page.py {{ args }}
+
 # verify coordinated Flex stack tags (ex* mapping on firmware for external)
 @validate-release-tags *args:
     uv run ./automation/validate_release_tags.py {{ args }}
