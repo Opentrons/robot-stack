@@ -3,8 +3,9 @@
 
 Spec: docs/robot-builds-page.md. The page links to the external release
 manifests. It does not read electron-updater YAMLs and it does not include
-internal hosts. Stable and beta builds are on the main page. Alpha builds are
-on a separate QA page that the main page does not link to.
+internal hosts. Stable builds are on the main page. Alpha builds are
+on a separate QA page that the main page does not link to. Beta builds are
+not shown.
 
 Usage:
     uv run ./automation/robot_builds_page.py
@@ -34,8 +35,9 @@ from automation.flex_urls import FLEX_EXTERNAL, FLEX_ROBOT_PREFIX
 from automation.ot2_calendar_semver import decode_ot2_external_version
 from automation.ot2_urls import OT2_EXTERNAL, OT2_ROBOT_PREFIX
 from automation.release import robot_manifest_production_entries
+from automation.site_nav import robot_display_font_css, robot_name_html
 
-Channel = Literal["stable", "beta", "alpha"]
+Channel = Literal["stable", "alpha"]
 
 QA_ALPHA_HREF = "qa/alpha/"
 DEFAULT_OUTPUT_DIR = Path(".build/robot-builds")
@@ -94,7 +96,6 @@ class BuildRow:
 class ProductBuilds:
     name: str
     stable: BuildRow | None
-    beta: BuildRow | None
     history: tuple[BuildRow, ...]
     alphas: tuple[BuildRow, ...]
 
@@ -140,8 +141,7 @@ def _flex_channel(version: str) -> Channel | None:
     tag = parsed.prerelease.split(".", 1)[0]
     if tag == "alpha":
         return "alpha"
-    if tag == "beta":
-        return "beta"
+    # Beta is intentionally omitted from the public page.
     return None
 
 
@@ -155,8 +155,7 @@ def _ot2_channel(version: str) -> Channel | None:
         return "stable"
     if prerelease == "alpha":
         return "alpha"
-    if prerelease == "beta":
-        return "beta"
+    # Beta is intentionally omitted from the public page.
     return None
 
 
@@ -219,11 +218,12 @@ def assemble_products(
 
 def _split_product(name: str, rows: list[BuildRow]) -> ProductBuilds:
     stable = next((row for row in rows if row.channel == "stable"), None)
-    beta = next((row for row in rows if row.channel == "beta"), None)
-    banner_versions = {row.version for row in (stable, beta) if row is not None}
-    history = tuple(row for row in rows if row.channel != "alpha" and row.version not in banner_versions)
+    banner_versions = {stable.version} if stable is not None else set()
+    history = tuple(
+        row for row in rows if row.channel == "stable" and row.version not in banner_versions
+    )
     alphas = tuple(row for row in rows if row.channel == "alpha")
-    return ProductBuilds(name=name, stable=stable, beta=beta, history=history, alphas=alphas)
+    return ProductBuilds(name=name, stable=stable, history=history, alphas=alphas)
 
 
 def _action(url: str, label: str) -> str:
@@ -234,9 +234,7 @@ def _action(url: str, label: str) -> str:
 
 def _render_row(row: BuildRow, *, banner: str | None) -> str:
     badge = ""
-    if row.channel == "beta":
-        badge = '<span class="badge beta">Beta</span>'
-    elif row.channel == "stable" and banner:
+    if row.channel == "stable" and banner:
         badge = '<span class="badge stable">Stable</span>'
     actions = [
         _action(row.system_url, "Robot system update"),
@@ -267,11 +265,10 @@ def _render_banner(row: BuildRow | None, kind: str, blurb: str) -> str:
 def _render_product_main(product: ProductBuilds) -> str:
     history = "".join(_render_row(row, banner=None) for row in product.history)
     if not history:
-        history = '<p class="empty">No older stable or beta builds.</p>'
+        history = '<p class="empty">No older stable builds.</p>'
     return (
         f'<section data-product="{_esc(product.name.lower())}">'
-        f"<h2>{_esc(product.name)}</h2>"
-        f"{_render_banner(product.beta, 'beta', 'Beta. The team is using this build. It is ahead of the customer default.')}"
+        f"<h2>{robot_name_html(product.name)}</h2>"
         f"{_render_banner(product.stable, 'stable', 'Stable. This is the customer default.')}"
         f'<div data-history=""><h3>Older builds</h3>{history}</div></section>'
     )
@@ -283,7 +280,7 @@ def _render_product_alpha(product: ProductBuilds) -> str:
         rows = '<p class="empty">No alpha builds.</p>'
     return (
         f'<section data-product="{_esc(product.name.lower())}">'
-        f"<h2>{_esc(product.name)}</h2>"
+        f"<h2>{robot_name_html(product.name)}</h2>"
         f'<div data-history="">{rows}</div></section>'
     )
 
@@ -296,47 +293,142 @@ def _footer(generated_at: datetime, sources: ManifestSources) -> str:
         ("OT-2 robot", sources.ot2_robot),
         ("OT-2 app", sources.ot2_app),
     )
-    links = " ".join(f'<a href="{_esc(url)}">{_esc(label)}</a>' for label, url in labels)
-    return f"<footer><p>Generated {stamp}.</p><p>Manifests: {links}</p></footer>"
+    links = " · ".join(f'<a href="{_esc(url)}">{_esc(label)}</a>' for label, url in labels)
+    return (
+        f'<footer class="meta">'
+        f"<div>Generated {stamp}.</div>"
+        f"<div>Manifests: {links}</div>"
+        f"</footer>"
+    )
 
 
-_CSS = """
-:root { color-scheme: light; --text: #1c1917; --muted: #57534e; --line: #e7e5e4; --bg: #fafaf9; --card: #fff; --link: #1d4ed8; }
-* { box-sizing: border-box; }
-body { margin: 0; font: 16px/1.5 "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--bg); }
-main { max-width: 52rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
-h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 0.4rem; }
-h2 { font-size: 1.3rem; margin: 1.5rem 0 0.6rem; }
-h3 { font-size: 1.05rem; margin: 0; }
-p { margin: 0; }
-a { color: var(--link); }
-.lede, .blurb, .empty, footer { color: var(--muted); }
-.lede { max-width: 40rem; }
-input[type="search"] {
-  width: 100%; font: inherit; margin: 1rem 0 0.5rem; padding: 0.45rem 0.7rem;
-  border: 1px solid #d6d3d1; border-radius: 0.4rem;
+_PAGE_CSS = """
+:root {
+  color-scheme: light dark;
+  --bg: #0f1419;
+  --panel: #1a222d;
+  --text: #e7ecf3;
+  --muted: #9aa7b8;
+  --accent: #60a5fa;
+  --warn: #fbbf24;
+  --border: #2b3645;
+  --ok: #34d399;
 }
-.banner, .release, section { background: var(--card); border: 1px solid var(--line); border-radius: 0.6rem; }
-.banner { padding: 0.8rem 1rem 0.4rem; margin: 0 0 0.8rem; }
-.banner.beta { border-color: #b45309; }
-.banner.stable { border-color: #047857; }
-.blurb { font-size: 0.92rem; margin-bottom: 0.4rem; }
-.release { padding: 0.7rem 0.2rem 0.2rem; }
-.banner .release { border: 0; padding: 0; }
-[data-history] .release { border-radius: 0; border-width: 1px 0 0; }
-.actions { list-style: none; margin: 0.35rem 0 0.5rem; padding: 0; }
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f8fb;
+    --panel: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --warn: #b45309;
+    --border: #d1d5db;
+    --ok: #047857;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+h1, h2, h3 { line-height: 1.2; }
+h1 { margin: 0 0 0.4rem; font-size: 1.75rem; }
+h2 { margin: 0 0 0.85rem; font-size: 1.35rem; }
+h3 { margin: 0; font-size: 1.05rem; }
+p { margin: 0; }
+a { color: var(--accent); }
+.lede, .blurb, .empty, .note, footer.meta { color: var(--muted); }
+.lede { max-width: 80ch; margin-bottom: 0.75rem; }
+.note { margin: 0.6rem 0 1rem; }
+input[type="search"] {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  margin: 0.75rem 0 0.25rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+input[type="search"]::placeholder { color: var(--muted); }
+section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin: 1.25rem 0;
+}
+.banner {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.85rem 1rem 0.35rem;
+  margin: 0 0 0.9rem;
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+.blurb { font-size: 0.92rem; margin-bottom: 0.45rem; }
+.release { padding: 0.75rem 0 0.15rem; }
+.banner .release { padding-top: 0.15rem; }
+[data-history] .release {
+  border-top: 1px solid var(--border);
+  padding: 0.85rem 0 0.2rem;
+}
+[data-history] h3 {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin: 0.35rem 0 0.15rem;
+}
+.actions {
+  list-style: none;
+  margin: 0.4rem 0 0.55rem;
+  padding: 0;
+}
 .actions li { padding: 0.12rem 0; }
 .badge {
-  font-size: 0.72rem; font-weight: 650; letter-spacing: 0.02em; text-transform: uppercase;
-  border-radius: 999px; padding: 0.05rem 0.45rem;
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 0.08rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--border));
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  vertical-align: middle;
 }
-.badge.beta { color: #9a3412; background: #ffedd5; }
-.badge.stable { color: #065f46; background: #ecfdf5; }
-.reflash { margin: 0 0 0.6rem; font-size: 0.92rem; }
-footer { font-size: 0.85rem; margin-top: 1.5rem; }
-footer p + p { margin-top: 0.3rem; }
-.note { margin-top: 0.6rem; }
+.reflash {
+  margin: 0 0 0.55rem;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+.reflash summary {
+  cursor: pointer;
+  color: var(--text);
+}
+.reflash p { margin: 0.4rem 0; }
+footer.meta {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 1.5rem;
+  font-size: 0.92rem;
+}
 """
+
+def _page_css() -> str:
+    """Match the engineering asset inventory look (tokens + Orbitron names)."""
+    return robot_display_font_css() + _PAGE_CSS
 
 _SEARCH_SCRIPT = """
 const input = document.getElementById("search");
@@ -351,13 +443,23 @@ input.addEventListener("input", () => {
 
 
 def _document(title: str, body: str, *, noindex: bool) -> str:
-    robots = '<meta name="robots" content="noindex">' if noindex else ""
-    return (
-        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"{robots}<title>{_esc(title)}</title><style>{_CSS}</style></head>"
-        f"<body><main>{body}</main><script>{_SEARCH_SCRIPT}</script></body></html>"
-    )
+    robots = '\n  <meta name="robots" content="noindex">' if noindex else ""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">{robots}
+  <title>{_esc(title)}</title>
+  <style>{_page_css()}</style>
+</head>
+<body>
+  <main>
+    {body}
+  </main>
+  <script>{_SEARCH_SCRIPT}</script>
+</body>
+</html>
+"""
 
 
 def render_pages(
@@ -373,8 +475,7 @@ def render_pages(
     footer = _footer(generated_at, sources)
     main_body = (
         "<h1>Opentrons robot builds</h1>"
-        '<p class="lede">Stable and beta downloads for Flex and OT-2. Stable is the file to send a customer. '
-        "Beta is labeled and shown first.</p>"
+        '<p class="lede">Stable downloads for Flex and OT-2. Stable is the file to send a customer.</p>'
         '<input id="search" type="search" placeholder="Filter older builds by version" '
         'aria-label="Filter older builds by version">'
         f"{_render_product_main(flex)}{_render_product_main(ot2)}{footer}"

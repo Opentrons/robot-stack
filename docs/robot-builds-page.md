@@ -1,6 +1,6 @@
 # Official robot builds page
 
-A public, informational Flex and OT-2 download page. It points at the live `releases.json` manifests and the assets they list, so Field Application Scientists can find the stable or beta file a customer should install without opening GitHub.
+A public, informational Flex and OT-2 download page. It points at the live `releases.json` manifests and the assets they list, so Field Application Scientists can find the stable file a customer should install without opening GitHub.
 
 This page does not replace the sources of truth. Robots keep updating from `releases.json`, and desktop apps keep updating from their channel YAMLs (electron-updater). The page only links to those files, and it does not expose internal hosts, pipelines, or implementation details.
 
@@ -9,7 +9,7 @@ This document is the spec. Build a first version from it, demo that version, the
 ## How we will ship it
 
 1. **Build.** Implement the page in this repo from the manifests and filters below, and stand up the hosting in Terraform all the way to `https://robot.builds.opentrons.com`. The demo runs on that real URL with real download links and scheduled publishing on.
-2. **Demo.** Walk Nusrat Begum, Alex Copperman, Jess Spangler, and Joe through current stable, current beta, OT-2, the QA-only alpha view, and the full-image disclosure.
+2. **Demo.** Walk Nusrat Begum, Alex Copperman, Jess Spangler, and Joe through current stable, OT-2, the QA-only alpha view, and the full-image disclosure.
 3. **Adjust.** Change copy, filters, layout, and the hostname if they want a different one, then point FAS at the page. A hostname change is a DNS and certificate change, not a rebuild.
 
 Josh owns this spec, the demo, and the follow-up changes. Jesse owns the build and the infrastructure. Alex reviews the demo against the workflow on his page. Nusrat, Jess, and Joe say what FAS will actually send to a customer.
@@ -24,7 +24,7 @@ Jira stories, when opened, belong on the build/devops project Jesse already runs
 - It drops every tag containing `beta`, hides `v9.1.0`, and pins OT-2 `26.6.0` as a hardcoded row.
 - GitHub release assets are a side publication. Robots install from `releases.json`.
 
-Nusrat's call for the first version: stable and beta. Beta is more prominent because the team uses it more now. Alpha is for QA only, so it is not obvious on the main page: it lives on a separate QA alpha page that is not linked from the main page or its navigation. QA finds it by URL. The main page does not have an alpha checkbox.
+Main page: stable only. Beta is not shown. Alpha is for QA only, so it is not obvious on the main page: it lives on a separate QA alpha page that is not linked from the main page or its navigation. QA finds it by URL. The main page does not have an alpha checkbox.
 
 ## Source of truth
 
@@ -53,10 +53,10 @@ Each robot entry is `fullImage`, `system`, `version`, `releaseNotes`. The system
 Public URL: `https://robot.builds.opentrons.com`, a name under the existing `builds.opentrons.com` zone. The artifacts are already world-readable, so a login wall does not add protection. The page's job is to name the right file.
 
 - Flex and OT-2 on one page.
-- Two banners: current stable and current beta. Stable is the customer default. Beta is labeled as beta and shown as a prominent banner, because Flex beta `10.2.0-beta.0` is ahead of stable `9.1.2` and the team uses betas more now.
+- One banner: current stable. Stable is the customer default. Beta builds are omitted from this page.
 - Under each version: robot system zip, Mac/Windows/Linux app installers, release notes. Full image sits in a disclosure labeled as a full reflash.
 - History with search, newest first. Flex sort reuses `sort_semver_versions_desc`. OT-2 sort reuses `ot2_version_sort_key`.
-- Main page lists stable and beta only. Flex has about 250 alphas against about 30 stable-plus-beta rows, so the main history stays short.
+- Main page lists stable only. Flex has about 250 alphas against far fewer stable rows, so the main history stays short.
 - QA alpha page lists alpha versions with the same row layout (system zip, installers, notes, full-image disclosure). It is a separate static file, not linked from the main page, and it is noindex so search engines do not surface it. It is public like everything else on the page; the separation is about discoverability for customers and FAS, not access control.
 - OT-2 includes only versions that match the external calendar scheme in [`automation/ot2_calendar_semver.py`](../automation/ot2_calendar_semver.py) (`YY.M.N` plus optional `-alpha.N` / `-beta.N`). That drops `.dev` builds, legacy `8.8.2`, and internal-style keys such as `26.5.19` that currently sit on the external OT-2 manifest.
 - Footer shows when the page data was generated, plus links to the four manifest URLs.
@@ -85,7 +85,7 @@ flowchart LR
 Publish a static page from this repo. A browser `fetch()` of the manifests would need new CORS headers; those responses have none today. The filter rules already exist in Python and should stay tested there.
 
 - New renderer beside [`automation/publish_assets_pages.py`](../automation/publish_assets_pages.py), reusing [`automation/release.py`](../automation/release.py), [`automation/asset_inventory.py`](../automation/asset_inventory.py), and [`automation/ot2_calendar_semver.py`](../automation/ot2_calendar_semver.py).
-- Tests with fixture manifests: V2 wins over legacy, beta sorts ahead of an older stable, alpha absent from the main page and present only on the QA alpha page, OT-2 `.dev` and `8.8.2` omitted, revoked app versions omitted, yml keys omitted, system zip present, full image kept out of the primary actions, main page has no link to the QA alpha page.
+- Tests with fixture manifests: V2 wins over legacy, beta omitted from public pages, alpha absent from the main page and present only on the QA alpha page, OT-2 `.dev` and `8.8.2` omitted, revoked app versions omitted, yml keys omitted, system zip present, full image kept out of the primary actions, main page has no link to the QA alpha page.
 
 ### Infrastructure
 

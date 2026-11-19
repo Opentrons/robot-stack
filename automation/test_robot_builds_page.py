@@ -67,8 +67,8 @@ class RobotBuildsPageTest(unittest.TestCase):
         self.assertNotIn("https://legacy.example/system.zip", main)
         self.assertIn("https://v2-only.example/system.zip", main)
 
-    def test_beta_sorts_ahead_of_an_older_stable(self) -> None:
-        main, _alpha = _render(
+    def test_beta_is_omitted_from_the_public_pages(self) -> None:
+        main, alpha = _render(
             flex_robot={
                 "productionV2": {
                     "9.1.2": _robot("https://example.test/stable-system.zip"),
@@ -78,9 +78,13 @@ class RobotBuildsPageTest(unittest.TestCase):
                 }
             }
         )
-        self.assertLess(main.index("10.2.0-beta.0"), main.index("9.1.2"))
-        history = main.split('data-history=""', 1)[1]
-        self.assertLess(history.index("9.0.0-beta.1"), history.index("8.0.0"))
+        combined = main + alpha
+        self.assertIn("9.1.2", main)
+        self.assertIn("8.0.0", main)
+        self.assertNotIn("10.2.0-beta.0", combined)
+        self.assertNotIn("9.0.0-beta.1", combined)
+        self.assertNotIn("beta-system.zip", combined)
+        self.assertNotIn("class=\"banner beta\"", main)
 
     def test_alpha_is_only_on_the_qa_page(self) -> None:
         main, alpha = _render(
@@ -109,7 +113,7 @@ class RobotBuildsPageTest(unittest.TestCase):
         )
         combined = main + alpha
         self.assertIn("26.6.0", main)
-        self.assertIn("26.6.0-beta.1", main)
+        self.assertNotIn("26.6.0-beta.1", combined)
         for dropped in ("26.5.19", "26.5.18.dev1", "8.8.2", "ot2-internal-style", "ot2-dev.zip", "ot2-legacy"):
             self.assertNotIn(dropped, combined)
 

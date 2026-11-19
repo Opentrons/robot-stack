@@ -3,6 +3,13 @@ name: Publish robot builds page
 # Hosting lives in Opentrons/robot-stack-infra (robot-builds stack).
 # The OIDC role trusts main only and rejects GitHub Environments.
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/robot-builds-page.yml"
+      - "automation/robot_builds_page.py"
+      - "automation/test_robot_builds_page.py"
   schedule:
     # Weekdays 9 AM / noon / 4 PM Eastern (EST); one hour later during EDT.
     - cron: "0 14,17,21 * * 1-5"
