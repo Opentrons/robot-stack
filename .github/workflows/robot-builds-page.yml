@@ -1,7 +1,7 @@
 name: Publish robot builds page
 
 # Hosting lives in Opentrons/robot-stack-infra (robot-builds stack).
-# The OIDC role trusts main only and rejects GitHub Environments.
+# The OIDC roles trust main only and reject GitHub Environments.
 on:
   push:
     branches:
@@ -31,14 +31,24 @@ concurrency:
 
 jobs:
   publish:
-    name: Publish to robot.builds.opentrons.com
+    name: Publish to ${{ matrix.site }}
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - site: robot.dev.builds.opentrons.com
+            bucket: robot.dev.builds.opentrons.com
+            role: arn:aws:iam::699250785121:role/github-actions-robot-builds-dev
+          - site: robot.builds.opentrons.com
+            bucket: robot.builds.opentrons.com
+            role: arn:aws:iam::879285218407:role/github-actions-robot-builds-prod
     env:
       AWS_REGION: us-east-1
-      SITE_BUCKET: robot.builds.opentrons.com
+      SITE_BUCKET: ${{ matrix.bucket }}
       OUTPUT_DIR: .build/robot-builds
-      PUBLISH_ROLE_ARN: arn:aws:iam::879285218407:role/github-actions-robot-builds-prod
+      PUBLISH_ROLE_ARN: ${{ matrix.role }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -101,7 +111,7 @@ jobs:
             --delete \
             --exclude "404.html" \
             --exclude "previous-manifest-state.json"
-          echo "Published https://robot.builds.opentrons.com/ (visible within a few minutes)."
+          echo "Published https://${SITE_BUCKET}/ (visible within a few minutes)."
 
       - name: Skip upload
         if: steps.generate.outputs.publish != 'true'
